@@ -576,7 +576,7 @@ const maxTypedDeclsPerSymbol = 16;
 const verifyTypeCacheEvaluatorFlags = false;
 
 // This debugging option prints each expression and its evaluated type.
-const printExpressionTypes = false;
+const printExpressionTypes = true;
 
 // The following number is chosen somewhat arbitrarily. We need to cut
 // off code flow analysis at some point for code flow graphs that are too
