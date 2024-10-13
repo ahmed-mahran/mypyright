@@ -3672,11 +3672,6 @@ export function createTypeEvaluator(
             }
         }
 
-        if (declaredType) {
-            const liveScopeIds = ParseTreeUtils.getTypeVarScopesForNode(nameNode);
-            declaredType = makeTypeVarsBound(declaredType, liveScopeIds);
-        }
-
         // We found an existing declared type. Make sure the type is assignable.
         let destType = typeResult.type;
         const isTypeAlias =
@@ -3685,7 +3680,11 @@ export function createTypeEvaluator(
         if (declaredType && !isTypeAlias) {
             let diagAddendum = new DiagnosticAddendum();
 
-            if (!assignType(declaredType, typeResult.type, diagAddendum)) {
+            const liveScopeIds = ParseTreeUtils.getTypeVarScopesForNode(nameNode);
+            const boundDeclaredType = makeTypeVarsBound(declaredType, liveScopeIds);
+            const srcType = makeTypeVarsBound(typeResult.type, liveScopeIds);
+
+            if (!assignType(boundDeclaredType, srcType, diagAddendum)) {
                 // If there was an expected type mismatch, use that diagnostic
                 // addendum because it will be more informative.
                 if (expectedTypeDiagAddendum) {
@@ -26453,13 +26452,14 @@ export function createTypeEvaluator(
             const destParamName = destParam.param.name ?? '';
             const srcParamName = srcParam.param.name ?? '';
             if (destParamName) {
-                const isDestPositionalOnly = destParam.kind === ParamKind.Positional;
+                const isDestPositionalOnly =
+                    destParam.kind === ParamKind.Positional || destParam.kind === ParamKind.ExpandedArgs;
                 if (
                     !isDestPositionalOnly &&
                     destParam.param.category !== ParamCategory.ArgsList &&
                     srcParam.param.category !== ParamCategory.ArgsList
                 ) {
-                    if (srcParam.kind === ParamKind.Positional) {
+                    if (srcParam.kind === ParamKind.Positional || srcParam.kind === ParamKind.ExpandedArgs) {
                         diag?.createAddendum().addMessage(
                             LocAddendum.functionParamPositionOnly().format({
                                 name: destParamName,

@@ -40,6 +40,7 @@ export enum ParamKind {
     Positional,
     Standard,
     Keyword,
+    ExpandedArgs,
 }
 
 export interface VirtualParamDetails {
@@ -186,7 +187,7 @@ export function getParamListDetails(evaluator: TypeEvaluator, type: FunctionType
                         index,
                         tupleArg.type,
                         /* defaultArgTypeOverride */ undefined,
-                        ParamKind.Positional
+                        ParamKind.ExpandedArgs
                     );
 
                     if (category === ParamCategory.Simple) {
