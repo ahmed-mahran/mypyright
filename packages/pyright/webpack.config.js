@@ -9,6 +9,7 @@ const { cacheConfig, monorepoResourceNameMapper, tsconfigResolveAliases } = requ
 
 const outPath = path.resolve(__dirname, 'dist');
 const typeshedFallback = path.resolve(__dirname, '..', 'pyright-internal', 'typeshed-fallback');
+const pythonFiles = path.resolve(__dirname, '..', 'pyright-internal', 'python_files');
 
 /**@type {(env: any, argv: { mode: 'production' | 'development' | 'none' }) => import('webpack').Configuration}*/
 module.exports = (_, { mode }) => {
@@ -63,7 +64,14 @@ module.exports = (_, { mode }) => {
                 },
             ],
         },
-        plugins: [new CopyPlugin({ patterns: [{ from: typeshedFallback, to: 'typeshed-fallback' }] })],
+        plugins: [
+            new CopyPlugin({
+                patterns: [
+                    { from: typeshedFallback, to: 'typeshed-fallback' },
+                    { from: pythonFiles, to: 'python_files' },
+                ],
+            }),
+        ],
         optimization: {
             splitChunks: {
                 cacheGroups: {

@@ -49,6 +49,7 @@ import {
     tryStat,
 } from '../common/uri/uriUtils';
 import { Localizer } from '../localization/localize';
+import { initPythonExec } from '../pythonExec';
 import { AnalysisCompleteCallback } from './analysis';
 import {
     BackgroundAnalysisProgram,
@@ -522,6 +523,14 @@ export class AnalyzerService {
                 });
             }
         }
+
+        initPythonExec(
+            (global as any).__rootDirectory,
+            this._configOptions.pythonPath ? [this._configOptions.pythonPath?.getFilePath()] : [],
+            this.fs.existsSync(this._configOptions.projectRoot)
+                ? this._configOptions.projectRoot.getFilePath()
+                : process.cwd()
+        );
 
         this._updateLibraryFileWatcher();
         this._updateConfigFileWatcher();
