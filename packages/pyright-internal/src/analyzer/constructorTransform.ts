@@ -18,7 +18,6 @@ import { ArgCategory, ExpressionNode, ParamCategory } from '../parser/parseNodes
 import { ConstraintTracker } from './constraintTracker';
 import { createFunctionFromConstructor } from './constructors';
 import { getParamListDetails, ParamKind } from './parameterUtils';
-import { Symbol, SymbolFlags } from './symbol';
 import { Arg, FunctionResult, TypeEvaluator } from './typeEvaluatorTypes';
 import {
     AnyType,
@@ -129,11 +128,7 @@ function applyPartialTransform(
         }
 
         // Create a new copy of the functools.partial class that overrides the __call__ method.
-        const newPartialClass = ClassType.cloneForSymbolTableUpdate(result.returnType);
-        ClassType.getSymbolTable(newPartialClass).set(
-            '__call__',
-            Symbol.createWithType(SymbolFlags.ClassMember, transformResult.returnType)
-        );
+        const newPartialClass = ClassType.cloneForPartial(result.returnType, transformResult.returnType);
 
         return {
             returnType: newPartialClass,
@@ -184,9 +179,6 @@ function applyPartialTransform(
             return undefined;
         }
 
-        // Create a new copy of the functools.partial class that overrides the __call__ method.
-        const newPartialClass = ClassType.cloneForSymbolTableUpdate(result.returnType);
-
         let synthesizedCallType: Type;
         if (applicableOverloads.length === 1) {
             synthesizedCallType = applicableOverloads[0];
@@ -199,10 +191,8 @@ function applyPartialTransform(
             );
         }
 
-        ClassType.getSymbolTable(newPartialClass).set(
-            '__call__',
-            Symbol.createWithType(SymbolFlags.ClassMember, synthesizedCallType)
-        );
+        // Create a new copy of the functools.partial class that overrides the __call__ method.
+        const newPartialClass = ClassType.cloneForPartial(result.returnType, synthesizedCallType);
 
         return {
             returnType: newPartialClass,

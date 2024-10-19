@@ -866,6 +866,9 @@ export interface ClassDetailsPriv {
     // as decorators for other classes or functions.
     deprecatedInstanceMessage?: string | undefined;
 
+    // Special-case fields for partial class.
+    partialCallType?: Type | undefined;
+
     // If this class is a callable class and part of an overloaded function,
     // this refers back to the overloaded function type.
     overloaded?: OverloadedType;
@@ -1071,12 +1074,9 @@ export namespace ClassType {
         return newClassType;
     }
 
-    export function cloneForSymbolTableUpdate(classType: ClassType): ClassType {
+    export function cloneForPartial(classType: ClassType, partialCallType: Type): ClassType {
         const newClassType = TypeBase.cloneType(classType);
-        newClassType.shared = { ...newClassType.shared };
-        newClassType.shared.fields = new Map(newClassType.shared.fields);
-        newClassType.shared.mro = Array.from(newClassType.shared.mro);
-        newClassType.shared.mro[0] = cloneAsInstantiable(newClassType);
+        newClassType.priv.partialCallType = partialCallType;
         return newClassType;
     }
 
@@ -3712,12 +3712,6 @@ export function isTypeSame(type1: Type, type2: Type, options: TypeSameOptions = 
             }
 
             if (!ClassType.isLiteralValueSame(type1, classType2)) {
-                return false;
-            }
-
-            // This test is required for the "partial" class, which clones
-            // the symbol table to add a custom __call__ method.
-            if (type1.shared.fields !== classType2.shared.fields) {
                 return false;
             }
 

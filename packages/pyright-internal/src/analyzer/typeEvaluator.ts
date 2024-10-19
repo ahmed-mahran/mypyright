@@ -573,6 +573,12 @@ const maxInferFunctionReturnRecursionCount = 12;
 // type aliases.
 const maxRecursiveTypeAliasRecursionCount = 10;
 
+// Normally a symbol can have only one type declaration, but there are
+// cases where multiple are possible (e.g. a property with a setter
+// and a deleter). In extreme cases, we need to limit the number of
+// type declarations we consider to avoid excessive computation.
+const maxTypedDeclsPerSymbol = 16;
+
 // This switch enables a special debug mode that attempts to catch
 // bugs due to inconsistent evaluation flags used when reading types
 // from the type cache.
@@ -4022,7 +4028,7 @@ export function createTypeEvaluator(
             const tupleType = getSpecializedTupleType(evaluatorInterface, subtype);
             if (tupleType && tupleType.priv.tupleTypeArgs) {
                 const sourceEntryTypes = tupleType.priv.tupleTypeArgs.map((t) =>
-                    addConditionToType(t.type, getTypeCondition(subtype), /* skipSelfCondition */ true)
+                    addConditionToType(t.type, getTypeCondition(subtype), { skipSelfCondition: true })
                 );
 
                 const unboundedIndex = tupleType.priv.tupleTypeArgs.findIndex((t) => t.isUnbounded);
@@ -5893,11 +5899,10 @@ export function createTypeEvaluator(
 
                 if (typeResult) {
                     if (!typeResult.typeErrors) {
-                        type = addConditionToType(
-                            typeResult.type,
-                            getTypeCondition(baseType),
-                            /* skipSelfCondition */ true
-                        );
+                        type = addConditionToType(typeResult.type, getTypeCondition(baseType), {
+                            skipSelfCondition: true,
+                            skipBoundTypeVars: true,
+                        });
                     } else {
                         typeErrors = true;
                     }
@@ -5914,7 +5919,7 @@ export function createTypeEvaluator(
                         narrowedTypeForSet = addConditionToType(
                             typeResult.narrowedTypeForSet,
                             getTypeCondition(baseType),
-                            /* skipSelfCondition */ true
+                            { skipSelfCondition: true, skipBoundTypeVars: true }
                         );
                     }
 
@@ -6040,7 +6045,9 @@ export function createTypeEvaluator(
                         const typeResult = getTypeOfBoundMember(node.d.member, subtype, memberName, usage, diag);
 
                         if (typeResult && !typeResult.typeErrors) {
-                            type = addConditionToType(typeResult.type, getTypeCondition(baseType));
+                            type = addConditionToType(typeResult.type, getTypeCondition(baseType), {
+                                skipBoundTypeVars: true,
+                            });
                             if (typeResult.isIncomplete) {
                                 isIncomplete = true;
                             }
@@ -12459,7 +12466,7 @@ export function createTypeEvaluator(
                 eliminateUnsolvedInUnions,
             },
         });
-        specializedReturnType = addConditionToType(specializedReturnType, typeCondition);
+        specializedReturnType = addConditionToType(specializedReturnType, typeCondition, { skipBoundTypeVars: true });
 
         // If the function includes a ParamSpec and the captured signature(s) includes
         // generic types, we may need to apply those solved TypeVars.
@@ -23302,26 +23309,33 @@ export function createTypeEvaluator(
         // cases where a property symbol is redefined to add a setter, deleter,
         // etc.
         if (usageNode && typedDecls.length > 1) {
-            const filteredTypedDecls = typedDecls.filter((decl) => {
-                if (decl.type !== DeclarationType.Alias) {
-                    // Is the declaration in the same execution scope as the "usageNode" node?
-                    const usageScope = ParseTreeUtils.getExecutionScopeNode(usageNode);
-                    const declScope = ParseTreeUtils.getExecutionScopeNode(decl.node);
+            if (typedDecls.length > maxTypedDeclsPerSymbol) {
+                // If there are too many typed decls, don't bother filtering them
+                // because this can be very expensive. Simply use the last one
+                // in this case.
+                typedDecls = [typedDecls[typedDecls.length - 1]];
+            } else {
+                const filteredTypedDecls = typedDecls.filter((decl) => {
+                    if (decl.type !== DeclarationType.Alias) {
+                        // Is the declaration in the same execution scope as the "usageNode" node?
+                        const usageScope = ParseTreeUtils.getExecutionScopeNode(usageNode);
+                        const declScope = ParseTreeUtils.getExecutionScopeNode(decl.node);
 
-                    if (usageScope === declScope) {
-                        if (!isFlowPathBetweenNodes(decl.node, usageNode, /* allowSelf */ false)) {
-                            return false;
+                        if (usageScope === declScope) {
+                            if (!isFlowPathBetweenNodes(decl.node, usageNode, /* allowSelf */ false)) {
+                                return false;
+                            }
                         }
                     }
+                    return true;
+                });
+
+                if (filteredTypedDecls.length === 0) {
+                    return { type: UnboundType.create() };
                 }
-                return true;
-            });
 
-            if (filteredTypedDecls.length === 0) {
-                return { type: UnboundType.create() };
+                typedDecls = filteredTypedDecls;
             }
-
-            typedDecls = filteredTypedDecls;
         }
 
         // Start with the last decl. If that's already being resolved,

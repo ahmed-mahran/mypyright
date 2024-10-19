@@ -220,6 +220,11 @@ export interface ApplyTypeVarOptions {
     };
 }
 
+export interface AddConditionOptions {
+    skipSelfCondition?: boolean;
+    skipBoundTypeVars?: boolean;
+}
+
 // Tracks whether a function signature has been seen before within
 // an expression. For example, in the expression "foo(foo, foo)", the
 // signature for "foo" will be seen three times at three different
@@ -920,14 +925,21 @@ export function getFullNameOfType(type: Type): string | undefined {
 export function addConditionToType<T extends Type>(
     type: T,
     condition: TypeCondition[] | undefined,
-    skipSelfCondition = false
+    options?: AddConditionOptions
 ): T {
     if (!condition) {
         return type;
     }
 
-    if (skipSelfCondition) {
+    if (options?.skipSelfCondition) {
         condition = condition.filter((c) => !TypeVarType.isSelf(c.typeVar));
+        if (condition.length === 0) {
+            return type;
+        }
+    }
+
+    if (options?.skipBoundTypeVars) {
+        condition = condition.filter((c) => c.typeVar.shared.constraints.length > 0);
         if (condition.length === 0) {
             return type;
         }
@@ -1835,7 +1847,8 @@ export function* getClassMemberIterator(
 
             // Next look at class members.
             if ((flags & MemberAccessFlags.SkipClassMembers) === 0) {
-                const symbol = memberFields.get(memberName);
+                let symbol = memberFields.get(memberName);
+
                 if (symbol && symbol.isClassMember()) {
                     const hasDeclaredType = symbol.hasTypedDeclarations();
                     if (!declaredTypesOnly || hasDeclaredType) {
@@ -1855,6 +1868,15 @@ export function* getClassMemberIterator(
                                 isInstanceMember = true;
                                 isClassMember = isDataclass;
                             }
+                        }
+
+                        // Handle the special case of a __call__ class member in a partial class.
+                        if (
+                            memberName === '__call__' &&
+                            classType.priv.partialCallType &&
+                            ClassType.isSameGenericClass(classType, specializedMroClass)
+                        ) {
+                            symbol = Symbol.createWithType(SymbolFlags.ClassMember, classType.priv.partialCallType);
                         }
 
                         const cm: ClassMember = {
