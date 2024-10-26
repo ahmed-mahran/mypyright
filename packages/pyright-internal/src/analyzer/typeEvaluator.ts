@@ -166,7 +166,7 @@ import { assignClassToProtocol, assignModuleToProtocol } from './protocols';
 import { Scope, ScopeType, SymbolWithScope } from './scope';
 import * as ScopeUtils from './scopeUtils';
 import { evaluateStaticBoolExpression } from './staticExpressions';
-import { indeterminateSymbolId, Symbol, SymbolFlags } from './symbol';
+import { indeterminateSymbolId, Symbol, SymbolFlags, SynthesizedTypeInfo } from './symbol';
 import { isConstantName, isPrivateName, isPrivateOrProtectedName } from './symbolNameUtils';
 import { getLastTypedDeclarationForSymbol, isEffectivelyClassVar } from './symbolUtils';
 import {
@@ -216,7 +216,6 @@ import {
     ResolveAliasOptions,
     SolveConstraintsOptions,
     SymbolDeclInfo,
-    SynthesizedTypeInfo,
     TypeEvaluator,
     TypeResult,
     TypeResultWithNode,
@@ -3279,7 +3278,7 @@ export function createTypeEvaluator(
                         // Handle the case where the type is synthesized (used for
                         // dataclasses).
                         if (synthesizedType) {
-                            isObjectHashable = !isNoneInstance(synthesizedType);
+                            isObjectHashable = !isNoneInstance(synthesizedType.type);
                         } else {
                             // Assume that if '__hash__' is declared as a variable, it is
                             // not hashable. If it's declared as a function, it is. We'll
@@ -5554,7 +5553,7 @@ export function createTypeEvaluator(
                 // purposes of resolving type aliases?
                 if (leftType && isTypeVar(leftType) && leftType.shared.recursiveAlias) {
                     // Type alias statements cannot be used with old-style type variables.
-                    if (typeAliasNode && !type.shared.isTypeParamSyntax) {
+                    if (typeAliasNode && !type.shared.isTypeParamSyntax && !type.props?.typeAliasInfo) {
                         addDiagnostic(
                             DiagnosticRule.reportGeneralTypeIssues,
                             LocMessage.typeParameterNotDeclared().format({
@@ -9027,6 +9026,7 @@ export function createTypeEvaluator(
             !isTypeSame(assertedType, arg0Type, {
                 treatAnySameAsUnknown: true,
                 ignorePseudoGeneric: true,
+                ignoreConditions: true,
             })
         ) {
             const srcDestTypes = printSrcDestTypes(arg0TypeResult.type, assertedType, { expandTypeAlias: true });
@@ -11048,10 +11048,11 @@ export function createTypeEvaluator(
             const param = paramInfo.param;
 
             if (param.name && param.category === ParamCategory.Simple && paramInfo.kind !== ParamKind.Positional) {
-                paramMap.set(param.name, {
-                    argsNeeded: param.category === ParamCategory.Simple && !paramInfo.defaultType ? 1 : 0,
-                    argsReceived: 0,
-                });
+                let argsNeeded = paramMap.get(param.name)?.argsNeeded ?? 0;
+                if (param.category === ParamCategory.Simple && !paramInfo.defaultType) {
+                    argsNeeded += 1;
+                }
+                paramMap.set(param.name, { argsNeeded, argsReceived: 0 });
             }
         });
 
@@ -12397,12 +12398,28 @@ export function createTypeEvaluator(
             if (paramSpec) {
                 if (argParam.argument.argCategory === ArgCategory.UnpackedList) {
                     if (isParamSpecArgs(paramSpec, argResult.argType)) {
+                        if (sawParamSpecArgs) {
+                            addDiagnostic(
+                                DiagnosticRule.reportCallIssue,
+                                LocMessage.paramSpecArgsKwargsDuplicate().format({ type: printType(paramSpec) }),
+                                argParam.errorNode
+                            );
+                        }
+
                         sawParamSpecArgs = true;
                     }
                 }
 
                 if (argParam.argument.argCategory === ArgCategory.UnpackedDictionary) {
                     if (isParamSpecKwargs(paramSpec, argResult.argType)) {
+                        if (sawParamSpecKwargs) {
+                            addDiagnostic(
+                                DiagnosticRule.reportCallIssue,
+                                LocMessage.paramSpecArgsKwargsDuplicate().format({ type: printType(paramSpec) }),
+                                argParam.errorNode
+                            );
+                        }
+
                         sawParamSpecKwargs = true;
                     }
                 }
@@ -16248,15 +16265,15 @@ export function createTypeEvaluator(
             }
         }
 
-        if ((flags & EvalFlags.AllowRequired) !== 0) {
-            isUsageLegal = true;
-        }
-
         let isReadOnly = typeArgs[0].isReadOnly;
         let isRequired = typeArgs[0].isRequired;
         let isNotRequired = typeArgs[0].isNotRequired;
 
         if (classType.shared.name === 'ReadOnly') {
+            if ((flags & EvalFlags.AllowReadOnly) !== 0) {
+                isUsageLegal = true;
+            }
+
             // Nested ReadOnly are not allowed.
             if (typeArgs[0].isReadOnly) {
                 isUsageLegal = false;
@@ -16264,6 +16281,10 @@ export function createTypeEvaluator(
 
             isReadOnly = true;
         } else {
+            if ((flags & EvalFlags.AllowRequired) !== 0) {
+                isUsageLegal = true;
+            }
+
             // Nested Required/NotRequired are not allowed.
             if (typeArgs[0].isRequired || typeArgs[0].isNotRequired) {
                 isUsageLegal = false;
@@ -17846,6 +17867,30 @@ export function createTypeEvaluator(
                             if (AnalyzerNodeInfo.getFileInfo(node).diagnosticRuleSet.enableExperimentalFeatures) {
                                 classType.shared.flags |=
                                     ClassTypeFlags.TypedDictMarkedClosed | ClassTypeFlags.TypedDictEffectivelyClosed;
+
+                                if (classType.shared.typedDictExtraItemsExpr) {
+                                    addDiagnostic(
+                                        DiagnosticRule.reportGeneralTypeIssues,
+                                        LocMessage.typedDictExtraItemsClosed(),
+                                        classType.shared.typedDictExtraItemsExpr
+                                    );
+                                }
+                            }
+                        }
+                    } else if (arg.d.name.d.value === 'extra_items') {
+                        // This is an experimental feature because PEP 728 hasn't been accepted yet.
+                        if (AnalyzerNodeInfo.getFileInfo(node).diagnosticRuleSet.enableExperimentalFeatures) {
+                            // Record a reference to the expression but don't evaluate it yet.
+                            // It may refer to the class itself.
+                            classType.shared.typedDictExtraItemsExpr = arg.d.valueExpr;
+                            classType.shared.flags |= ClassTypeFlags.TypedDictEffectivelyClosed;
+
+                            if (ClassType.isTypedDictMarkedClosed(classType)) {
+                                addDiagnostic(
+                                    DiagnosticRule.reportGeneralTypeIssues,
+                                    LocMessage.typedDictExtraItemsClosed(),
+                                    classType.shared.typedDictExtraItemsExpr
+                                );
                             }
                         }
                     } else {
@@ -19529,9 +19574,9 @@ export function createTypeEvaluator(
                     return type;
                 }
 
-                // Is this an unpacked TypedDict? If so, return it unmodified.
+                // Is this an unpacked TypedDict? If so, return its packed version.
                 if (isClassInstance(type) && ClassType.isTypedDictClass(type) && type.priv.isUnpacked) {
-                    return type;
+                    return ClassType.cloneForPacked(type);
                 }
 
                 // Wrap the type in a dict with str keys.
@@ -21726,6 +21771,10 @@ export function createTypeEvaluator(
             flags |= EvalFlags.AllowRequired | EvalFlags.TypeExpression;
         }
 
+        if (options?.allowReadOnly) {
+            flags |= EvalFlags.AllowReadOnly | EvalFlags.TypeExpression;
+        }
+
         if (options?.allowUnpackedTuple) {
             flags |= EvalFlags.AllowUnpackedTuple;
         } else {
@@ -21829,16 +21878,27 @@ export function createTypeEvaluator(
             // Filter the declarations based on flow reachability.
             const reachableDecl = symbolWithScope.symbol.getDeclarations().find((decl) => {
                 if (decl.type !== DeclarationType.Alias && decl.type !== DeclarationType.Intrinsic) {
-                    // Is the declaration in the same execution scope as the "usageNode" node?
-                    const usageScope = ParseTreeUtils.getExecutionScopeNode(node);
-                    const declNode =
+                    // Determine if the declaration is in the same execution scope as the "usageNode" node.
+                    let usageScopeNode = ParseTreeUtils.getExecutionScopeNode(node);
+                    const declNode: ParseNode =
                         decl.type === DeclarationType.Class ||
                         decl.type === DeclarationType.Function ||
                         decl.type === DeclarationType.TypeAlias
                             ? decl.node.d.name
                             : decl.node;
-                    const declScope = ParseTreeUtils.getExecutionScopeNode(declNode);
-                    if (usageScope === declScope) {
+                    const declScopeNode = ParseTreeUtils.getExecutionScopeNode(declNode);
+
+                    // If this is a type parameter scope, it will be a proxy for its
+                    // containing scope, so we need to use that instead.
+                    const usageScope = AnalyzerNodeInfo.getScope(usageScopeNode);
+                    if (usageScope?.proxy) {
+                        const typeParamScope = AnalyzerNodeInfo.getScope(usageScopeNode);
+                        if (!typeParamScope?.symbolTable.has(name) && usageScopeNode.parent) {
+                            usageScopeNode = ParseTreeUtils.getExecutionScopeNode(usageScopeNode.parent);
+                        }
+                    }
+
+                    if (usageScopeNode === declScopeNode) {
                         if (!isFlowPathBetweenNodes(declNode, node)) {
                             // If there was no control flow path from the usage back
                             // to the source, see if the usage node is reachable by
@@ -22089,7 +22149,8 @@ export function createTypeEvaluator(
     // we need to handle the special case of string literals used as keys within a
     // dictionary expression where those keys are associated with a known TypedDict.
     function getDeclInfoForStringNode(node: StringNode): SymbolDeclInfo | undefined {
-        const declarations: Declaration[] = [];
+        const decls: Declaration[] = [];
+        const synthesizedTypes: SynthesizedTypeInfo[] = [];
         const expectedType = getExpectedType(node)?.type;
 
         if (expectedType) {
@@ -22104,14 +22165,19 @@ export function createTypeEvaluator(
                         const symbol = lookUpObjectMember(evaluatorInterface, subtype, node.d.value)?.symbol;
 
                         if (symbol) {
-                            appendArray(declarations, symbol.getDeclarations());
+                            appendArray(decls, symbol.getDeclarations());
+
+                            const synthTypeInfo = symbol.getSynthesizedType();
+                            if (synthTypeInfo) {
+                                synthesizedTypes.push(synthTypeInfo);
+                            }
                         }
                     }
                 }
             });
         }
 
-        return declarations.length === 0 ? undefined : { decls: declarations, synthesizedTypes: [] };
+        return decls.length === 0 ? undefined : { decls, synthesizedTypes };
     }
 
     function getAliasFromImport(node: NameNode): NameNode | undefined {
@@ -22131,7 +22197,7 @@ export function createTypeEvaluator(
             return undefined;
         }
 
-        const declarations: Declaration[] = [];
+        const decls: Declaration[] = [];
         const synthesizedTypes: SynthesizedTypeInfo[] = [];
 
         // If the node is part of a "from X import Y as Z" statement and the node
@@ -22150,7 +22216,7 @@ export function createTypeEvaluator(
                         return decl.type === DeclarationType.Alias && decl.node === node.parent;
                     });
 
-                    appendArray(declarations, getDeclarationsWithUsesLocalNameRemoved(declsForThisImport));
+                    appendArray(decls, getDeclarationsWithUsesLocalNameRemoved(declsForThisImport));
                 }
             }
         } else if (
@@ -22215,14 +22281,14 @@ export function createTypeEvaluator(
                         // which includes every assignment of that symbol.
                         const typedDecls = symbol.getTypedDeclarations();
                         if (typedDecls.length > 0) {
-                            appendArray(declarations, typedDecls);
+                            appendArray(decls, typedDecls);
                         } else {
-                            const synthesizedType = symbol.getSynthesizedType();
-                            if (synthesizedType) {
-                                synthesizedTypes.push({ type: synthesizedType, node });
-                            } else {
-                                appendArray(declarations, symbol.getDeclarations());
-                            }
+                            appendArray(decls, symbol.getDeclarations());
+                        }
+
+                        const synthTypeInfo = symbol.getSynthesizedType();
+                        if (synthTypeInfo) {
+                            synthesizedTypes.push(synthTypeInfo);
                         }
                     }
                 });
@@ -22242,7 +22308,7 @@ export function createTypeEvaluator(
                     // Synthesize an alias declaration for this name part. The only
                     // time this case is used is for IDE services such as
                     // the find all references, hover provider and etc.
-                    declarations.push(synthesizeAliasDeclaration(importInfo.resolvedUris[namePartIndex]));
+                    decls.push(synthesizeAliasDeclaration(importInfo.resolvedUris[namePartIndex]));
                 }
             }
         } else if (node.parent && node.parent.nodeType === ParseNodeType.Argument && node === node.parent.d.name) {
@@ -22257,13 +22323,13 @@ export function createTypeEvaluator(
                     if (isFunction(baseType) && baseType.shared.declaration) {
                         const paramDecl = getDeclarationFromKeywordParam(baseType, paramName);
                         if (paramDecl) {
-                            declarations.push(paramDecl);
+                            decls.push(paramDecl);
                         }
                     } else if (isOverloaded(baseType)) {
                         getOverloads(baseType).forEach((f) => {
                             const paramDecl = getDeclarationFromKeywordParam(f, paramName);
                             if (paramDecl) {
-                                declarations.push(paramDecl);
+                                decls.push(paramDecl);
                             }
                         });
                     } else if (isInstantiableClass(baseType)) {
@@ -22276,15 +22342,21 @@ export function createTypeEvaluator(
                         if (initMethodType && isFunction(initMethodType)) {
                             const paramDecl = getDeclarationFromKeywordParam(initMethodType, paramName);
                             if (paramDecl) {
-                                declarations.push(paramDecl);
+                                decls.push(paramDecl);
                             } else if (
                                 ClassType.isDataClass(baseType) ||
                                 ClassType.isTypedDictClass(baseType) ||
                                 ClassType.hasNamedTupleEntry(baseType, paramName)
                             ) {
                                 const lookupResults = lookUpClassMember(evaluatorInterface, baseType, paramName);
+
                                 if (lookupResults) {
-                                    appendArray(declarations, lookupResults.symbol.getDeclarations());
+                                    appendArray(decls, lookupResults.symbol.getDeclarations());
+
+                                    const synthTypeInfo = lookupResults.symbol.getSynthesizedType();
+                                    if (synthTypeInfo) {
+                                        synthesizedTypes.push(synthTypeInfo);
+                                    }
                                 }
                             }
                         }
@@ -22320,11 +22392,16 @@ export function createTypeEvaluator(
             );
 
             if (symbolWithScope) {
-                appendArray(declarations, symbolWithScope.symbol.getDeclarations());
+                appendArray(decls, symbolWithScope.symbol.getDeclarations());
+
+                const synthTypeInfo = symbolWithScope.symbol.getSynthesizedType();
+                if (synthTypeInfo) {
+                    synthesizedTypes.push(synthTypeInfo);
+                }
             }
         }
 
-        return { decls: declarations, synthesizedTypes };
+        return { decls, synthesizedTypes };
     }
 
     function getTypeForDeclaration(declaration: Declaration): DeclaredSymbolTypeInfo {
@@ -22453,6 +22530,7 @@ export function createTypeEvaluator(
                             getTypeOfExpressionExpectingType(typeAnnotationNode, {
                                 allowFinal: true,
                                 allowRequired: true,
+                                allowReadOnly: true,
                             }).type
                         );
                     } else {
@@ -22466,6 +22544,7 @@ export function createTypeEvaluator(
                             allowClassVar: ParseTreeUtils.isClassVarAllowedForAssignmentTarget(declNode),
                             allowFinal: ParseTreeUtils.isFinalAllowedForAssignmentTarget(declNode),
                             allowRequired: ParseTreeUtils.isRequiredAllowedForAssignmentTarget(declNode),
+                            allowReadOnly: ParseTreeUtils.isRequiredAllowedForAssignmentTarget(declNode),
                             enforceClassTypeVarScope: declaration.isDefinedByMemberAccess,
                         });
                     }
@@ -23283,7 +23362,7 @@ export function createTypeEvaluator(
     // provided, but type inference is still required. In such cases, the attributes
     // are returned as flags.
     function getDeclaredTypeOfSymbol(symbol: Symbol, usageNode?: NameNode): DeclaredSymbolTypeInfo {
-        const synthesizedType = symbol.getSynthesizedType();
+        const synthesizedType = symbol.getSynthesizedType()?.type;
         if (synthesizedType) {
             return { type: synthesizedType };
         }
@@ -24171,55 +24250,68 @@ export function createTypeEvaluator(
             // Now handle generic base classes.
             destType.shared.baseClasses.forEach((baseClass) => {
                 if (
-                    isInstantiableClass(baseClass) &&
-                    !ClassType.isBuiltIn(baseClass, 'object') &&
-                    !ClassType.isBuiltIn(baseClass, 'Protocol') &&
-                    !ClassType.isBuiltIn(baseClass, 'Generic') &&
-                    baseClass.shared.typeParams.length > 0
+                    !isAssignable ||
+                    !isInstantiableClass(baseClass) ||
+                    ClassType.isBuiltIn(baseClass, ['object', 'Protocol', 'Generic']) ||
+                    baseClass.shared.typeParams.length === 0
                 ) {
-                    const specializedDestBaseClass = specializeForBaseClass(evaluatorInterface, destType, baseClass);
-                    const specializedSrcBaseClass = specializeForBaseClass(evaluatorInterface, srcType, baseClass);
+                    return;
+                }
 
-                    if (!ignoreBaseClassVariance) {
-                        specializedDestBaseClass.shared.typeParams.forEach((param, index) => {
-                            if (
-                                !isParamSpec(param) &&
-                                !isTypeVarTuple(param) &&
-                                !param.shared.isSynthesized &&
-                                specializedSrcBaseClass.priv.typeArgs &&
-                                index < specializedSrcBaseClass.priv.typeArgs.length &&
-                                specializedDestBaseClass.priv.typeArgs &&
-                                index < specializedDestBaseClass.priv.typeArgs.length
-                            ) {
-                                const paramVariance = param.shared.declaredVariance;
-                                if (isTypeVar(specializedSrcBaseClass.priv.typeArgs[index])) {
-                                    if (
-                                        paramVariance === Variance.Invariant ||
-                                        paramVariance === Variance.Contravariant
-                                    ) {
-                                        isAssignable = false;
-                                    }
-                                } else if (isTypeVar(specializedDestBaseClass.priv.typeArgs[index])) {
-                                    if (paramVariance === Variance.Invariant || paramVariance === Variance.Covariant) {
-                                        isAssignable = false;
-                                    }
-                                }
+                const specializedDestBaseClass = specializeForBaseClass(evaluatorInterface, destType, baseClass);
+                const specializedSrcBaseClass = specializeForBaseClass(evaluatorInterface, srcType, baseClass);
+
+                if (!ignoreBaseClassVariance) {
+                    specializedDestBaseClass.shared.typeParams.forEach((param, index) => {
+                        if (isParamSpec(param) || isTypeVarTuple(param) || param.shared.isSynthesized) {
+                            return;
+                        }
+
+                        if (
+                            !specializedSrcBaseClass.priv.typeArgs ||
+                            index >= specializedSrcBaseClass.priv.typeArgs.length ||
+                            !specializedDestBaseClass.priv.typeArgs ||
+                            index >= specializedDestBaseClass.priv.typeArgs.length
+                        ) {
+                            return;
+                        }
+
+                        const paramVariance = param.shared.declaredVariance;
+                        if (isTypeVar(specializedSrcBaseClass.priv.typeArgs[index])) {
+                            if (paramVariance === Variance.Invariant || paramVariance === Variance.Contravariant) {
+                                isAssignable = false;
+                                return;
                             }
-                        });
-                    }
+                        }
 
-                    if (
-                        isAssignable &&
-                        !assignClassToSelf(
-                            specializedDestBaseClass,
-                            specializedSrcBaseClass,
-                            assumedVariance,
-                            ignoreBaseClassVariance,
-                            recursionCount
-                        )
-                    ) {
-                        isAssignable = false;
-                    }
+                        if (isTypeVar(specializedDestBaseClass.priv.typeArgs[index])) {
+                            if (paramVariance === Variance.Invariant || paramVariance === Variance.Covariant) {
+                                isAssignable = false;
+                                return;
+                            }
+                        }
+                    });
+                }
+
+                if (!isAssignable) {
+                    return;
+                }
+
+                // Handle tuples specially since their type arguments are variadic.
+                if (ClassType.isTupleClass(specializedDestBaseClass)) {
+                    return;
+                }
+
+                if (
+                    !assignClassToSelf(
+                        specializedDestBaseClass,
+                        specializedSrcBaseClass,
+                        assumedVariance,
+                        ignoreBaseClassVariance,
+                        recursionCount
+                    )
+                ) {
+                    isAssignable = false;
                 }
             });
 
@@ -26550,6 +26642,7 @@ export function createTypeEvaluator(
                 }
             } else if (
                 destParam.kind !== ParamKind.Positional &&
+                destParam.kind !== ParamKind.ExpandedArgs &&
                 srcParam.kind === ParamKind.Positional &&
                 srcParamDetails.kwargsIndex === undefined &&
                 !srcParamDetails.params.some(
@@ -26692,8 +26785,10 @@ export function createTypeEvaluator(
                             canAssign = false;
                         }
 
+                        const destParamKind = destParamDetails.params[paramIndex].kind;
                         if (
-                            destParamDetails.params[paramIndex].kind !== ParamKind.Positional &&
+                            destParamKind !== ParamKind.Positional &&
+                            destParamKind !== ParamKind.ExpandedArgs &&
                             srcParamDetails.kwargsIndex === undefined
                         ) {
                             diag?.addMessage(
@@ -26805,7 +26900,8 @@ export function createTypeEvaluator(
                         if (
                             param.param.name &&
                             param.param.category === ParamCategory.Simple &&
-                            param.kind !== ParamKind.Positional
+                            param.kind !== ParamKind.Positional &&
+                            param.kind !== ParamKind.ExpandedArgs
                         ) {
                             destParamMap.set(param.param.name, param);
                         }
@@ -27693,7 +27789,8 @@ export function createTypeEvaluator(
                 ) {
                     if (
                         !FunctionParam.isNameSynthesized(baseParam) &&
-                        baseParamDetails.params[i].kind !== ParamKind.Positional
+                        baseParamDetails.params[i].kind !== ParamKind.Positional &&
+                        baseParamDetails.params[i].kind !== ParamKind.ExpandedArgs
                     ) {
                         diag?.addMessage(
                             LocAddendum.overrideParamNamePositionOnly().format({

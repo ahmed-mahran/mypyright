@@ -1176,7 +1176,9 @@ export function getUnknownTypeForCallable(): FunctionType {
 // "self specializes" the class, filling in its own type parameters
 // as type arguments.
 export function selfSpecializeClass(type: ClassType, options?: SelfSpecializeOptions): ClassType {
-    if (!requiresTypeArgs(type)) {
+    // We can't use requiresTypeArgs(type) here because it returns false
+    // if the type parameters have default values.
+    if (type.shared.typeParams.length === 0) {
         return type;
     }
 
@@ -2058,14 +2060,24 @@ export function getTypeVarArgsRecursive(type: Type, recursionCount = 0): TypeVar
     recursionCount++;
 
     const aliasInfo = type.props?.typeAliasInfo;
-    if (aliasInfo?.typeArgs) {
+    if (aliasInfo) {
         const combinedList: TypeVarType[] = [];
 
-        aliasInfo?.typeArgs.forEach((typeArg) => {
-            addTypeVarsToListIfUnique(combinedList, getTypeVarArgsRecursive(typeArg, recursionCount));
-        });
+        if (aliasInfo.typeArgs) {
+            aliasInfo?.typeArgs.forEach((typeArg) => {
+                addTypeVarsToListIfUnique(combinedList, getTypeVarArgsRecursive(typeArg, recursionCount));
+            });
 
-        return combinedList;
+            return combinedList;
+        }
+
+        if (aliasInfo.shared.typeParams) {
+            aliasInfo.shared.typeParams.forEach((typeParam) => {
+                addTypeVarsToListIfUnique(combinedList, [typeParam]);
+            });
+
+            return combinedList;
+        }
     }
 
     if (isTypeVar(type)) {
@@ -3479,7 +3491,7 @@ export class TypeVarTransformer {
         }
 
         // Shortcut the operation if possible.
-        if (!requiresSpecialization(type)) {
+        if (this.canSkipTransform(type)) {
             return type;
         }
 
@@ -3660,6 +3672,10 @@ export class TypeVarTransformer {
         return type;
     }
 
+    canSkipTransform(type: Type): boolean {
+        return !requiresSpecialization(type);
+    }
+
     transformTypeVar(typeVar: TypeVarType, recursionCount: number): Type | undefined {
         return undefined;
     }
@@ -3701,7 +3717,7 @@ export class TypeVarTransformer {
         return type;
     }
 
-    transformTypeVarsInClassType(classType: ClassType, recursionCount: number): ClassType {
+    transformTypeVarsInClassType(classType: ClassType, recursionCount: number) {
         const typeParams = ClassType.getTypeParams(classType);
 
         // Handle the common case where the class has no type parameters.
@@ -4027,7 +4043,7 @@ class UniqueFunctionSignatureTransformer extends TypeVarTransformer {
         return type;
     }
 
-    override transformTypeVarsInClassType(classType: ClassType, recursionCount: number): ClassType {
+    override transformTypeVarsInClassType(classType: ClassType, recursionCount: number) {
         // Don't transform classes.
         return classType;
     }

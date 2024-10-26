@@ -1213,7 +1213,7 @@ function validateContainmentOperation(
                         deprecatedInfo = returnTypeResult.magicMethodDeprecationInfo;
                     }
 
-                    return returnTypeResult?.type;
+                    return returnTypeResult?.type ?? evaluator.getBuiltInObject(errorNode, 'bool');
                 }
             );
         }

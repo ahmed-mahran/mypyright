@@ -1429,7 +1429,7 @@ function narrowTypeForInstance(
                 // class whose type is unknown (e.g. an import failed). We'll
                 // note this case specially so we don't do any narrowing, which
                 // will generate false positives.
-                if (filterIsSubclass && filterIsSuperclass) {
+                if (filterIsSuperclass) {
                     if (!isTypeIsCheck && concreteFilterType.priv.includeSubclasses) {
                         // If the filter type includes subclasses, we can't eliminate
                         // this type in the negative direction. We'll relax this for
@@ -1437,7 +1437,7 @@ function narrowTypeForInstance(
                         isClassRelationshipIndeterminate = true;
                     }
 
-                    if (!ClassType.isSameGenericClass(runtimeVarType, concreteFilterType)) {
+                    if (filterIsSubclass && !ClassType.isSameGenericClass(runtimeVarType, concreteFilterType)) {
                         isClassRelationshipIndeterminate = true;
                     }
                 }
@@ -1524,9 +1524,6 @@ function narrowTypeForInstance(
                                     concreteFilterType
                                 );
                                 filteredTypes.push(intersection ?? varType);
-
-                                // Don't attempt to narrow in the negative direction.
-                                isClassRelationshipIndeterminate = true;
                             }
                         }
                     } else if (
@@ -2332,7 +2329,7 @@ function narrowTypeForTypeIs(evaluator: TypeEvaluator, type: Type, classType: Cl
                 if (isPositiveTest) {
                     if (matches) {
                         if (ClassType.isSameGenericClass(subtype, classType)) {
-                            return subtype;
+                            return addConditionToType(subtype, classType.props?.condition);
                         }
 
                         return addConditionToType(ClassType.cloneAsInstance(classType), subtype.props?.condition);
@@ -2475,7 +2472,7 @@ function narrowTypeForLiteralComparison(
     isPositiveTest: boolean,
     isIsOperator: boolean
 ): Type {
-    return mapSubtypes(referenceType, (subtype) => {
+    return evaluator.mapSubtypesExpandTypeVars(referenceType, /* options */ undefined, (subtype) => {
         subtype = evaluator.makeTopLevelTypeVarsConcrete(subtype);
 
         if (isAnyOrUnknown(subtype)) {

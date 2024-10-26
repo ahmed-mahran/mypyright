@@ -228,7 +228,7 @@ export class PyrightServer extends LanguageServerBase {
         return new BackgroundAnalysis(this.serverOptions.serviceProvider);
     }
 
-    protected override createHost() {
+    protected override createHost(): Host {
         return new FullAccessHost(this.serverOptions.serviceProvider);
     }
 

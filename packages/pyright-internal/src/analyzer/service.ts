@@ -8,7 +8,7 @@
  * Python files.
  */
 
-import * as TOML from '@iarna/toml';
+import * as TOML from 'js-toml';
 import * as JSONC from 'jsonc-parser';
 import { AbstractCancellationTokenSource, CancellationToken } from 'vscode-languageserver';
 
@@ -702,7 +702,7 @@ export class AnalyzerService {
         // Ensure that if no command line or config options were applied, we have some defaults.
         this._ensureDefaultOptions(host, configOptions, projectRoot, executionRoot, commandLineOptions);
 
-        // Once we have defaults, we can then setup the execution environments. Execution enviroments
+        // Once we have defaults, we can then setup the execution environments. Execution environments
         // inherit from the defaults.
         if (configs) {
             for (const config of configs) {
@@ -1137,9 +1137,9 @@ export class AnalyzerService {
     private _parsePyprojectTomlFile(pyprojectPath: Uri): object | undefined {
         return this._attemptParseFile(pyprojectPath, (fileContents, attemptCount) => {
             try {
-                const configObj = TOML.parse(fileContents);
-                if (configObj && configObj.tool && (configObj.tool as TOML.JsonMap).mypyright) {
-                    return (configObj.tool as TOML.JsonMap).mypyright as object;
+                const configObj = TOML.load(fileContents);
+                if (configObj && 'tool' in configObj) {
+                    return (configObj.tool as Record<string, object>).mypyright as object;
                 }
             } catch (e: any) {
                 this._console.error(`Pyproject file parse attempt ${attemptCount} error: ${JSON.stringify(e)}`);
@@ -1358,7 +1358,7 @@ export class AnalyzerService {
                             'https://github.com/microsoft/pyright/blob/main/docs/configuration.md.'
                     );
 
-                    // Show it in messagebox if it is supported.
+                    // Show it in message box if it is supported.
                     this._tryShowLongOperationMessageBox();
 
                     loggedLongOperationError = true;

@@ -180,7 +180,7 @@ interface CachedTypeInfo {
 export interface TypeBaseProps {
     // Used to handle nested references to instantiable classes
     // (e.g. type[type[type[T]]]). If the field isn't present,
-    // it is assumed to be zero.
+    // it is assumed to be zero
     instantiableDepth: number | undefined;
 
     // Used to handle nested references to mapped instantiable classes
@@ -192,11 +192,11 @@ export interface TypeBaseProps {
     instantiableMappedDepth: number | undefined;
 
     // Used in cases where the type is a special form when used in a
-    // value expression such as UnionType, Literal, or Required.
+    // value expression such as UnionType, Literal, or Required
     specialForm: ClassType | undefined;
 
     // Used for "type form" objects, the evaluated form
-    // of a type expression in a value expression context.
+    // of a type expression in a value expression context
     typeForm: Type | undefined;
 
     // Used only for type aliases
@@ -729,6 +729,7 @@ interface ClassDetailsShared {
     dataClassBehaviors?: DataClassBehaviors | undefined;
     namedTupleEntries?: Set<string> | undefined;
     typedDictEntries?: TypedDictEntries | undefined;
+    typedDictExtraItemsExpr?: ExpressionNode | undefined;
     localSlotsNames?: string[];
 
     // If the class is decorated with a @deprecated decorator, this
@@ -1584,11 +1585,11 @@ export interface FunctionParam {
     flags: FunctionParamFlags;
     name: string | undefined;
 
-    // Use getEffectiveParamType to access this field.
+    // Use getParamType to access this field.
     // eslint-disable-next-line @typescript-eslint/naming-convention
     _type: Type;
 
-    // Use getEffectiveParamDefaultArgType to access this field.
+    // Use getParamDefaultType to access this field.
     // eslint-disable-next-line @typescript-eslint/naming-convention
     _defaultType: Type | undefined;
 
@@ -3226,10 +3227,13 @@ export namespace TypeVarType {
         return newInstance;
     }
 
-    export function cloneForPacked(type: TypeVarTupleType) {
+    export function cloneForPacked(type: TypeVarType) {
         const newInstance = TypeBase.cloneType(type);
         newInstance.priv.isUnpacked = false;
-        newInstance.priv.isInUnion = false;
+
+        if (isTypeVarTuple(newInstance)) {
+            newInstance.priv.isInUnion = false;
+        }
 
         if (newInstance.priv.freeTypeVar) {
             newInstance.priv.freeTypeVar = TypeVarType.cloneForPacked(newInstance.priv.freeTypeVar);
