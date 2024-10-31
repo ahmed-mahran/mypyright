@@ -609,6 +609,8 @@ export const enum AssignTypeFlags {
 }
 
 export interface TypeEvaluator {
+    typeMapRecursionSet: Set<string>;
+
     runWithCancellationToken<T>(token: CancellationToken, callback: () => T): T;
 
     getType: (node: ExpressionNode) => Type | undefined;

@@ -640,6 +640,7 @@ export function createTypeEvaluator(
     const suppressedNodeStack: SuppressedNodeStackEntry[] = [];
     const assignClassToSelfStack: AssignClassToSelfInfo[] = [];
 
+    let typeMapRecursionSet = new Set<string>();
     let functionRecursionMap = new Set<number>();
     let codeFlowAnalyzerCache = new Map<number, CodeFlowAnalyzerCacheEntry[]>();
     let typeCache = new Map<number, TypeCacheEntry>();
@@ -698,6 +699,7 @@ export function createTypeEvaluator(
     // circular references in complex data structures, so it fails
     // to clean up the objects if we don't help it out.
     function disposeEvaluator() {
+        typeMapRecursionSet = new Set<string>();
         functionRecursionMap = new Set<number>();
         codeFlowAnalyzerCache = new Map<number, CodeFlowAnalyzerCacheEntry[]>();
         typeCache = new Map<number, TypeCacheEntry>();
@@ -1141,6 +1143,8 @@ export function createTypeEvaluator(
         initializePrefetchedTypes(node);
 
         let typeResult = getTypeOfExpressionCore(node, flags, inferenceContext, constraints);
+
+        typeResult.type = MyPyrightExtensions.applyTypeMap(evaluatorInterface, node, typeResult.type);
 
         // Should we disable type promotions for bytes?
         if (
@@ -28813,6 +28817,7 @@ export function createTypeEvaluator(
     const getInferredReturnType = wrapWithLogger(_getInferredReturnType);
 
     const evaluatorInterface: TypeEvaluator = {
+        typeMapRecursionSet,
         runWithCancellationToken,
         getType,
         getTypeResult,

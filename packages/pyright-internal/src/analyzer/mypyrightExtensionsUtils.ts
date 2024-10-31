@@ -1,7 +1,15 @@
 import { assert, fail } from '../common/debug';
 import { DiagnosticAddendum } from '../common/diagnostic';
-import { ExpressionNode } from '../parser/parseNodes';
+import { DiagnosticRule } from '../common/diagnosticRules';
+import { DiagnosticSink } from '../common/diagnosticSink';
+import { convertOffsetsToRange } from '../common/positionUtils';
+import { ExpressionNode, isExpressionNode, ParseNode, ParseNodeType } from '../parser/parseNodes';
+import { ParseOptions, Parser } from '../parser/parser';
+import { pythonExecTypeMap } from '../pythonExec';
+import { getFileInfo, setFileInfo } from './analyzerNodeInfo';
 import { ConstraintTracker } from './constraintTracker';
+import { printExpression } from './parseTreeUtils';
+import { ParseTreeWalker } from './parseTreeWalker';
 import { EvalFlags, TypeEvaluator, TypeResult } from './typeEvaluatorTypes';
 import {
     AnyType,
@@ -18,13 +26,16 @@ import {
     Type,
     TypeBase,
     TypeFlags,
+    TypeVarKind,
     TypeVarType,
     UnionableType,
     UnknownType,
+    Variance,
 } from './types';
 import {
     convertToInstance,
     convertToInstantiable,
+    getTypeVarArgsRecursive,
     InferenceContext,
     isLiteralLikeType,
     isNoneInstance,
@@ -35,6 +46,8 @@ import {
 } from './typeUtils';
 
 export namespace MyPyrightExtensions {
+    export const printTypeMapResult: boolean = false;
+
     const enum TupleCreationFlags {
         None = 0,
 
@@ -786,5 +799,222 @@ export namespace MyPyrightExtensions {
             classType.shared.fullName === 'mypyright_extensions.subscriptablemethod' ||
             classType.shared.fullName === 'mypyright_extensions.subscriptableclassmethod'
         );
+    }
+
+    function typeVarToPythonDeclarationSyntax(typeVar: TypeVarType, toPythonSyntax: (type: Type) => string) {
+        switch (typeVar.shared.kind) {
+            case TypeVarKind.TypeVar:
+                // (name, *constraints, bound=None, covariant=False, contravariant=False, infer_variance=False, default=typing.NoDefault)
+                return (
+                    `${typeVar.shared.name}=TypeVar('${typeVar.shared.name}',` +
+                    `${
+                        typeVar.shared.constraints.length > 0
+                            ? `${typeVar.shared.constraints.map((c) => toPythonSyntax(c))},`
+                            : ''
+                    }` +
+                    `${typeVar.shared.boundType ? `bound=${toPythonSyntax(typeVar.shared.boundType)},` : ''}` +
+                    `${typeVar.shared.declaredVariance === Variance.Covariant ? 'covariant=True,' : ''}` +
+                    `${typeVar.shared.declaredVariance === Variance.Contravariant ? 'contravariant=True,' : ''}` +
+                    `${typeVar.shared.declaredVariance === Variance.Auto ? 'infer_variance=True,' : ''}` +
+                    `${
+                        typeVar.shared.isDefaultExplicit ? `default=${toPythonSyntax(typeVar.shared.defaultType)}` : ''
+                    }` +
+                    `)`
+                );
+            case TypeVarKind.TypeVarTuple:
+                // (name, *, default=typing.NoDefault)
+                return (
+                    `${typeVar.shared.name}=TypeVarTuple('${typeVar.shared.name}',` +
+                    `${
+                        typeVar.shared.isDefaultExplicit ? `default=${toPythonSyntax(typeVar.shared.defaultType)}` : ''
+                    }` +
+                    `)`
+                );
+            case TypeVarKind.ParamSpec:
+                // (name, *, bound=None, covariant=False, contravariant=False, default=typing.NoDefault)
+                return (
+                    `${typeVar.shared.name}=ParamSpec('${typeVar.shared.name}',` +
+                    `${typeVar.shared.boundType ? `bound=${toPythonSyntax(typeVar.shared.boundType)},` : ''}` +
+                    `${typeVar.shared.declaredVariance === Variance.Covariant ? 'covariant=True,' : ''}` +
+                    `${typeVar.shared.declaredVariance === Variance.Contravariant ? 'contravariant=True,' : ''}` +
+                    `${
+                        typeVar.shared.isDefaultExplicit ? `default=${toPythonSyntax(typeVar.shared.defaultType)}` : ''
+                    }` +
+                    `)`
+                );
+        }
+    }
+
+    function generateTypeMapPythonCode(type: Type, toPythonSyntax: (type: Type) => string) {
+        //TODO this is vulnerable to deprecation of PEP 484 (TypeVar), PEP 612 (ParamSpec),
+        // and PEP 646 (TypeVarTuple) in favor of PEP 695 (Type Parameter Syntax).
+        const typeVars = getTypeVarArgsRecursive(type);
+        let sawTypeVar = false;
+        let sawTypeVarTuple = false;
+        let sawParamSpec = false;
+        const typeVarsDecls = typeVars
+            .map((typeVar) => {
+                switch (typeVar.shared.kind) {
+                    case TypeVarKind.TypeVar:
+                        sawTypeVar = true;
+                        break;
+                    case TypeVarKind.TypeVarTuple:
+                        sawTypeVarTuple = true;
+                        break;
+                    case TypeVarKind.ParamSpec:
+                        sawParamSpec = true;
+                        break;
+                }
+                return typeVarToPythonDeclarationSyntax(typeVar, toPythonSyntax);
+            })
+            .join(';');
+
+        const typingImports = [
+            sawTypeVar ? 'TypeVar' : undefined,
+            sawTypeVarTuple ? 'TypeVarTuple' : undefined,
+            sawParamSpec ? 'ParamSpec' : undefined,
+        ].filter((i) => i !== undefined);
+
+        return [
+            typingImports.length > 0 ? `from typing import ${typingImports.join(',')}` : '',
+            typeVarsDecls,
+            `_mypyright_type_map_t=${toPythonSyntax(type)}`,
+        ]
+            .filter((line) => line.length > 0)
+            .join(';');
+    }
+
+    export function applyTypeMap(evaluator: TypeEvaluator, node: ParseNode, type: Type): Type {
+        let result = type;
+
+        if (
+            isClass(type) &&
+            type.shared.baseClasses.some(
+                (baseType) => isClass(baseType) && baseType.shared.fullName === 'mypyright_extensions.TypeMap'
+            ) &&
+            // make sure we are applying the type map in the context of the correct node
+            // e.g. don't apply to a name node while the parent is an index node with
+            // type arguments.
+            type.shared.declaration?.node !== node &&
+            isExpressionNode(node) &&
+            ((type.shared.typeParams.length > 0 && node.nodeType === ParseNodeType.Index) ||
+                (type.shared.typeParams.length === 0 && node.nodeType === ParseNodeType.Name) ||
+                !(node.nodeType === ParseNodeType.Index || node.nodeType === ParseNodeType.Name))
+        ) {
+            const toPythonSyntax = function (t: Type) {
+                return evaluator.printType(
+                    //TODO when do you need to convert to instance instead?
+                    TypeBase.isInstantiable(t) ? TypeBase.cloneTypeAsInstance(t, /* cache */ false) : t,
+                    { enforcePythonSyntax: true }
+                );
+            };
+
+            const typeMapKey = toPythonSyntax(result);
+            if (evaluator.typeMapRecursionSet.has(typeMapKey)) {
+                // Guard against recursive type mapping; Map[T] => V => Map[V] => T ...
+                // If the type map returns a type which itself is a type map that returns
+                // maybe itself or a previously returned type, we need to detect this
+                // recursion.
+                return result;
+            }
+
+            const fileInfo = getFileInfo(node);
+            const code = generateTypeMapPythonCode(type, toPythonSyntax);
+            const typeMapCallResult = pythonExecTypeMap(fileInfo.fileUri.getFilePath(), code);
+            if (typeMapCallResult.status) {
+                const parser = new Parser();
+
+                const parseOptions = new ParseOptions();
+                parseOptions.isStubFile = false;
+                parseOptions.pythonVersion = fileInfo.executionEnvironment.pythonVersion;
+                parseOptions.reportErrorsForParsedStringContents = true;
+
+                const parsingDiag = new DiagnosticSink();
+                const parseResults = parser.parseSourceFile(typeMapCallResult.output, parseOptions, parsingDiag);
+
+                if (parsingDiag.getErrors().length > 0) {
+                    parsingDiag
+                        .getErrors()
+                        .forEach((error) =>
+                            evaluator.addDiagnostic(
+                                (error.getRule() as DiagnosticRule) || DiagnosticRule.reportGeneralTypeIssues,
+                                'TypeMap result parse error in `' + parseResults.text + '`: ' + error.message,
+                                node
+                            )
+                        );
+                } else {
+                    evaluator.typeMapRecursionSet.add(typeMapKey);
+                    parseResults.parserOutput.parseTree.parent = node.parent;
+                    setFileInfo(parseResults.parserOutput.parseTree, getFileInfo(node));
+
+                    // Take place as a sibling to the subject node in original parse tree.
+                    // Subtree at impersonator node should mimic same text range of subject node
+                    // so that all errors are reporter on text range of subject node.
+                    function impersonateNode(other: ParseNode) {
+                        const subjectNode = node;
+                        other.parent = subjectNode.parent;
+                        class NodeImpersonator extends ParseTreeWalker {
+                            override visit(node: ParseNode): boolean {
+                                (node as any).start = subjectNode.start;
+                                (node as any).length = subjectNode.length;
+                                return true;
+                            }
+                        }
+                        new NodeImpersonator().walk(other);
+                    }
+
+                    let typeChanged = false;
+                    const firstNode = parseResults.parserOutput.parseTree.d.statements[0];
+                    if (firstNode.nodeType === ParseNodeType.Class) {
+                        impersonateNode(firstNode);
+                        const typeResult = evaluator.getTypeOfClass(firstNode);
+                        if (typeResult) {
+                            result = typeResult.classType;
+                            typeChanged = true;
+                        }
+                    } else if (firstNode.nodeType === ParseNodeType.StatementList) {
+                        const expressionNode = firstNode.d.statements[0];
+                        if (isExpressionNode(expressionNode)) {
+                            impersonateNode(expressionNode);
+                            const typeResult = evaluator.getTypeOfExpression(expressionNode);
+                            if (!typeResult.typeErrors) {
+                                result = typeResult.type;
+                                typeChanged = true;
+                            }
+                        }
+                    }
+
+                    if (typeChanged) {
+                        // TODO what other inheritable context info do we need to migrate from original type?
+                        // Any recursive data to apply to subtypes?
+                        result.flags = type.flags;
+                        if (type.props?.instantiableDepth !== undefined) {
+                            TypeBase.setInstantiableDepth(result, type.props?.instantiableDepth);
+                        }
+                        if (type.props?.instantiableMappedDepth !== undefined) {
+                            TypeBase.setInstantiableMappedDepth(result, type.props?.instantiableMappedDepth);
+                        }
+
+                        if (printTypeMapResult) {
+                            const range = convertOffsetsToRange(node.start, node.start + node.length, fileInfo.lines);
+                            const lineNum = (range.start.line + 1).toString();
+                            console.log(
+                                `${printExpression(node)} (${lineNum}): ${evaluator.printType(
+                                    type
+                                )} ==> ${evaluator.printType(result)}`
+                            );
+                        }
+                    }
+
+                    evaluator.typeMapRecursionSet.delete(typeMapKey);
+                }
+            } else if (typeMapCallResult.error) {
+                const diag = new DiagnosticAddendum();
+                diag.addMessage(typeMapCallResult.error);
+                evaluator.addDiagnostic(DiagnosticRule.reportGeneralTypeIssues, diag.getString(), node);
+            }
+        }
+
+        return result;
     }
 }

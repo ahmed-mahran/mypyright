@@ -9,7 +9,7 @@ import * as ch from 'child_process';
 import path from 'path';
 import * as rpc from 'vscode-jsonrpc/node';
 
-const logPythonExecOutput: boolean = true;
+const logPythonExecOutput: boolean = false;
 
 let rootDirectory: string | undefined;
 let interpreter: string[] | undefined;
@@ -18,6 +18,7 @@ let cwd: string | undefined;
 export interface ExecutionResult {
     status: boolean;
     output: string;
+    error?: string;
 }
 
 export function initPythonExec(_rootDirectory: string, _interpreter: string[], _cwd?: string) {
@@ -26,7 +27,11 @@ export function initPythonExec(_rootDirectory: string, _interpreter: string[], _
     cwd = _cwd;
 }
 
-export function pythonExec(code: string): ExecutionResult {
+export function pythonExecTypeMap(file: string, typeMap: string) {
+    return pythonExec(file, typeMap, ['--map-type']);
+}
+
+export function pythonExec(file: string, code: string, args: string[]): ExecutionResult {
     if (!interpreter) {
         throw new Error('Python interpreter is not initialized, please restart!');
     }
@@ -36,25 +41,31 @@ export function pythonExec(code: string): ExecutionResult {
     }
 
     const pythonExecPath = path.join(rootDirectory, 'python_files', 'python_exec.py');
-    const spawnResult = ch.spawnSync(interpreter[0], [...interpreter.slice(1), pythonExecPath], { input: code, cwd });
-    // const spawnResult = ch.spawnSync(interpreter[0], [...interpreter.slice(1)], { input: code, cwd });
+    const spawnResult = ch.spawnSync(interpreter[0], [...interpreter.slice(1), pythonExecPath, '-f', file, ...args], {
+        input: code,
+        cwd,
+    });
 
     if (spawnResult.error) {
         throw spawnResult.error;
     }
 
+    let error: string | undefined = undefined;
     if (spawnResult.status !== 0) {
-        console.error(`Python exec returned with error code ${spawnResult.status}`);
+        error = `Python exec returned with error code (${spawnResult.status}) cwd=${cwd} file=${file} args=[${args.join(
+            ','
+        )}] code=${code}: ${spawnResult.stderr.toString()}`;
+        console.error(error);
     }
 
-    console.error(spawnResult.stderr.toString());
     const output = spawnResult.stdout.toString();
     if (logPythonExecOutput) {
-        console.log(`Python exec output: ${output}`);
+        console.log(`Python exec cwd=${cwd} file=${file} args=[${args.join(',')}] code=${code} output=${output}`);
     }
     return {
         status: spawnResult.status === 0 && spawnResult.error === undefined,
         output,
+        error,
     };
 }
 
