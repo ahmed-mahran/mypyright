@@ -7,5 +7,6 @@ This is a fork of [Pyright](https://github.com/microsoft/pyright) with added fea
 - Multiple Unpackings of Type Arguments
 - Type Transformations of Variadic Type Variables
 - Subscriptable Functions
+- Static Type Programming (Type Macros)
 
 There is more to be added in future. Refer to [MyPyright](https://github.com/ahmed-mahran/mypyright) on GitHub for more details.

@@ -222,6 +222,8 @@ reveal_type(fn(int)) # Tuple[int]
 
 However, this is not currently possible with variadic generics. This is what this new feature is about.
 
+### `Map[F, *Ts]`
+
 Similar to [this PEP draft](https://docs.google.com/document/d/1szTVcFyLznoDT7phtT-6Fpvp27XaBw9DmbTLHrB6BE4/edit), MyPyright adds a new typing extension, `Map[F, *Ts]`, where `F` must be a generic class of at least one type parameter. The first type parameter will be specialized for each type of `*Ts`.
 
 ```python
@@ -554,6 +556,150 @@ reveal_type(fn2[int, str, float]) # (t: int, str, float) -> tuple[int, str, floa
   def fn_pep718[*Ts](*args: *Ts) -> tuple[*Ts]
   reveal_type(fn_pep718[int, str](int, str)) # tuple[type[int], type[str]]
   ```
+
+## Static Type Programming (Type Macros)
+
+This is in general about programming the static type checker to allow reasoning about complex type relations. The static type checker evaluates a type annotation to produce another type expression that has a simpler form or to further restrict and narrow a given type expression.
+
+The static type checker executes a user program at static type checking time which could be on a terminal as a side effect of executing the type checker commands, or at code edit time on the fly when the type checker is called through a language server within an IDE.
+
+### Static Type Transformations (Type Maps)
+
+This is about programming the static type checker to substitute a type hint with another computed type hint at static type checking time. For instance, the type checker could be programmed to transform `Add[float, int]` to a simpler form, `float`.
+
+The computed type must be [equivalent](https://typing.readthedocs.io/en/latest/spec/glossary.html#term-equivalent) to the original type (e.g. `float` is equivalent to `Add[float, int]`). This means that both types must describe the same set of possible objects. However, the computed type could have a simpler form which result in better readability and reasoning.
+
+The type transformation is a mapping from a domain of types to another domain of types. Since, a type is a set of objects, the domain and codomain of the mapping each is a set of sets (a set of types is a set of sets of objects). Generally, the domain is a cartesian product of sets of types and the codomain is a single set of types. For example, `tuple[T: (int, str), float]` could be seen as a mapping from `{int, str} x {float}` to the domain of tuples `{(a, b); a: int | str, b: float}`.
+
+The mapping could define a relation between types that is not necessarily a [subtyping](https://typing.readthedocs.io/en/latest/spec/glossary.html#term-subtype) relation. For example, in `tuple[int, str]`: neither `int`, `str` nor `tuple[int, str]` can be described as subtype of one another but in fact all are disjoint types, however `tuple` has defined a cartesian product relation between `int` and `str`.
+
+#### `TypeMap[*Params]`
+
+MyPyright introduces `TypeMap`
+
+```python
+class TypeMap[*Params]:
+  @classmethod
+  def map_type(cls, origin: str, type_args: tuple[type, ...]) -> str: ...
+```
+
+`TypeMap` is a marker interface to define the type mapping logic through implementation of `map_type` class method. `origin` is a string representation in python syntax of the original type expression, e.g. `Add[float, int]`. `type_args` is a tuple of input types on which the computed type depends. Those are the type arguments given at the map usage site, e.g. `float` and `int` in case of `Add[float, int]`. `map_type` returns a string representation in python syntax of the computed either type expression or type definition.
+
+#### Returning a type expression
+
+In the following example, `map_type` returns a type expression. `Add` computes the lowest bound type when adding two variables of numeric types (only `int`, `float` and `Literal` are handled). `Add[A, B]` is a type map `Add: {int, float, Literal} x {int, float, Literal} -> {int, float, Literal}`.
+
+```python
+from mypyright_extensions import TypeMap
+
+class Add[A, B](TypeMap):
+  @classmethod
+  def map_type(cls, origin: str, type_args: tuple[type, ...]) -> str:
+    a, b = type_args
+
+    if a is float or b is float:
+      return 'float' # float type expression
+    
+    def find_int_literal(x: type):
+      if getattr(x, '__origin__', None) is Literal and len(getattr(x, '__args__', ())) == 1:
+        return x.__args__[0]
+      if getattr(x, '__origin__', None) is type and len(getattr(x, '__args__', ())) == 1:
+        return find_int_literal(x.__args__[0])
+    a_lit = find_int_literal(a)
+    b_lit = find_int_literal(b)
+
+    if a_lit is not None and b_lit is not None:
+      return f'Literal[{a_lit + b_lit}]' # Literal type expression
+    
+    if a is int or b is int:
+      return 'int' # int type expression
+    
+    return origin # the original type expression
+
+def add[A, B](a: A, b: B) -> Add[A, B]: ...
+
+reveal_type(add(type[Literal[1]], type[Literal[5]])) # Literal[6]
+reveal_type(add(1, 2)) # int
+reveal_type(add(1.0, 2)) # float
+```
+
+#### Returning a type definition
+
+In the following example, `Sub[T]` computes a [nominal subtype](https://typing.readthedocs.io/en/latest/spec/concepts.html#nominal-and-structural-types) of the input type `T` as `map_type` returns a definition of a new (dummy) type with type `T` as a base class. Using a type definition instead of a type expression helps defining relations of maps to certain abstract type structures. This applies in cases where the [structure](https://typing.readthedocs.io/en/latest/spec/concepts.html#nominal-and-structural-types) of the type is of significance than its [name](https://typing.readthedocs.io/en/latest/spec/concepts.html#nominal-and-structural-types).
+
+```python
+from mypyright_extensions import TypeMap, print_type
+
+class Sub[T](TypeMap):
+  @classmethod
+  def map_type(cls, origin: str, type_args: tuple[type, ...]) -> str:
+    t = type_args[0]
+    bases = print_type(t)
+    name = 'Sub_' + bases.replace('[', '_').replace(']', '_').replace(',', '_').replace(' ', '')
+    return f"class {name}({bases}): pass"
+
+
+class DumDum: ...
+
+def give_me_dumdum() -> DumDum: ...
+def give_me_dumdum_child() -> Sub[DumDum]: ...
+def consume_dumdum(x: DumDum): ...
+
+consume_dumdum(give_me_dumdum()) # OK
+consume_dumdum(give_me_dumdum_child()) # OK
+
+reveal_type(give_me_dumdum_child()) # Sub_DumDum
+```
+
+#### Function Call Analogy
+
+Using a `TypeMap` implementation, e.g. `Add[float, T]`, as a type hint is analogous to a function call, e.g. `add(1.0, t)`. Similar to a function call where values and variables are provided as arguments within parentheses, a `TypeMap` is applied as a type hint in generics syntax where type arguments are provided within square brackets.
+
+|               | Function             | TypeMap                  |
+|---------------|----------------------|--------------------------|
+|**Example**    | `add(1.0, t)`        | `Add[float, T]`          |
+|**Application**| function call        | type hint                |
+|**Arguments**  | values and variables | types and type variables |
+|**Enclosing**  | parenthesis          | square brackets          |
+
+#### TBD
+
+The following are points for further considerations to be thoroughly investigated and looked for.
+
+##### Marker interface or a `Protocol`
+
+`Protocol` is the pythonic way to do it. It is enough to define a `map_type` class method to enable type mapping magic rather than needing to import and explicitly extend the marker interface `TypeMap`.
+
+##### Type representation
+
+Computed type must be in a representation that the type checker understands and converted from a representation that the user understands. The type checker must understand it because the type checker will process it, and the user must understand it because the user will produce it. Since every one/thing in this equation understands Python, representations in Python syntax is a natural choice.
+
+However, constructing types (either expressions or definitions) via composition of literal strings is not ideal but in fact is more error-prone as strings are not checked for syntax nor for type correctness and in general is not processed as a piece of code in the development environment.
+
+This is a problem of code generation, and in general is handled by consrtuction or manipulation of [ASTs](https://docs.python.org/3/library/ast.html) by directly dealing with ASTs or through a friendly [quasi-quotes](https://docs.scala-lang.org/overviews/quasiquotes/intro.html) representation.
+
+##### `__class_getitem__` or `map_type`
+
+Overriding `__class_getitem__` is indeed a plausible option. [The purpose of `__class_getitem__`](https://docs.python.org/3/reference/datamodel.html#the-purpose-of-class-getitem) is to allow type hinting of custom generic classes and using `__class_getitem__` on any class for purposes other than type hinting is discouraged. This makes it less susceptible to backward compatibility issues. However, `__class_getiem__` is expected to return `GenericAlias` object to be considered [properly defined](https://docs.python.org/3/reference/datamodel.html#class-getitem-versus-getitem).
+
+##### Runtime
+
+Runtime type checkers could simply opt-in by executing the type map to compute the new type.
+
+##### Code Organization
+
+Type checker executes `map_type` which is a python code. This requires a convention for determining a python interpreter and a working directory. Consider the following file structure:
+
+- `edit.py`: is the file being edited or type checked which references and imports a type transformation (like `Add[A, B]`).
+- `typemap.py`: is the file containing the type transformation implementation.
+
+According to how python interpreter works, the whole python file `edit.py` must be executed and so all files of imported modules, and modules in imported modules, and so on recursively. This will lead to unnecessary code execution causing unintended behaviour and side effects at type check time as well as degrading the type checker performance.
+
+A carefull convention must be set and followed to enforce separation and to reduce the scope of type checker executed code. Maybe a separate macros package could help the type checker in both purposes of executing and checking only macros code.
+
+<!-- ### Static Type Predicates (Refinement Types) -->
+
+
 
 <!-- # Publishing on VSCode Marketplace
 
