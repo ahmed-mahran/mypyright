@@ -1080,7 +1080,11 @@ function shouldSkipInitEvaluation(evaluator: TypeEvaluator, classType: ClassType
 
         if (isClassInstance(subtype)) {
             const inheritanceChain: InheritanceChain = [];
-            const isDerivedFrom = ClassType.isDerivedFrom(subtype, classType, inheritanceChain);
+            const isDerivedFrom = ClassType.isDerivedFrom(
+                ClassType.cloneAsInstantiable(subtype),
+                classType,
+                inheritanceChain
+            );
 
             if (!isDerivedFrom) {
                 skipInitCheck = true;

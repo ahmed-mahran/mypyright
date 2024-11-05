@@ -96,7 +96,12 @@ test('OverloadOverride1', () => {
 
 test('OverloadImpl1', () => {
     const analysisResults = TestUtils.typeAnalyzeSampleFiles(['overloadImpl1.py']);
-    TestUtils.validateResults(analysisResults, 7);
+    TestUtils.validateResults(analysisResults, 6);
+});
+
+test('OverloadImpl2', () => {
+    const analysisResults = TestUtils.typeAnalyzeSampleFiles(['overloadImpl2.py']);
+    TestUtils.validateResults(analysisResults, 1);
 });
 
 test('OverloadOverlap1', () => {
@@ -416,6 +421,14 @@ test('TypeVarTuple29', () => {
 
     configOptions.defaultPythonVersion = pythonVersion3_12;
     const analysisResults = TestUtils.typeAnalyzeSampleFiles(['typeVarTuple29.py'], configOptions);
+    TestUtils.validateResults(analysisResults, 0);
+});
+
+test('TypeVarTuple30', () => {
+    const configOptions = new ConfigOptions(Uri.empty());
+
+    configOptions.defaultPythonVersion = pythonVersion3_12;
+    const analysisResults = TestUtils.typeAnalyzeSampleFiles(['typeVarTuple30.py'], configOptions);
     TestUtils.validateResults(analysisResults, 0);
 });
 

@@ -1187,6 +1187,10 @@ export function selfSpecializeClass(type: ClassType, options?: SelfSpecializeOpt
     }
 
     const typeParams = type.shared.typeParams.map((typeParam) => {
+        if (isTypeVarTuple(typeParam)) {
+            typeParam = TypeVarType.cloneForUnpacked(typeParam);
+        }
+
         return options?.useBoundTypeVars ? TypeVarType.cloneAsBound(typeParam) : typeParam;
     });
     return ClassType.specialize(type, typeParams);
@@ -1779,7 +1783,7 @@ export function* getClassMemberIterator(
         let classFlags = ClassIteratorFlags.Default;
         if (flags & MemberAccessFlags.SkipOriginalClass) {
             if (isClass(classType)) {
-                skipMroClass = classType;
+                skipMroClass = isClassInstance(classType) ? ClassType.cloneAsInstantiable(classType) : classType;
             }
         }
         if (flags & MemberAccessFlags.SkipBaseClasses) {
@@ -1876,7 +1880,10 @@ export function* getClassMemberIterator(
                         if (
                             memberName === '__call__' &&
                             classType.priv.partialCallType &&
-                            ClassType.isSameGenericClass(classType, specializedMroClass)
+                            ClassType.isSameGenericClass(
+                                TypeBase.isInstance(classType) ? ClassType.cloneAsInstantiable(classType) : classType,
+                                specializedMroClass
+                            )
                         ) {
                             symbol = Symbol.createWithType(SymbolFlags.ClassMember, classType.priv.partialCallType);
                         }
@@ -2083,6 +2090,11 @@ export function getTypeVarArgsRecursive(type: Type, recursionCount = 0): TypeVar
     if (isTypeVar(type)) {
         // Don't return any recursive type alias placeholders.
         if (type.shared.recursiveAlias) {
+            return [];
+        }
+
+        // Don't return any bound type variables.
+        if (TypeVarType.isBound(type)) {
             return [];
         }
 
@@ -2384,7 +2396,6 @@ export function isEffectivelyInstantiable(type: Type, options?: IsInstantiableOp
     return false;
 }
 
-export function convertToInstance(type: ClassType, includeSubclasses?: boolean): ClassType;
 export function convertToInstance(type: ParamSpecType, includeSubclasses?: boolean): ParamSpecType;
 export function convertToInstance(type: TypeVarTupleType, includeSubclasses?: boolean): TypeVarTupleType;
 export function convertToInstance(type: TypeVarType, includeSubclasses?: boolean): TypeVarType;
@@ -4289,30 +4300,43 @@ class ApplySolvedTypeVarsTransformer extends TypeVarTransformer {
         // in cases where TypeVars can go unsolved due to unions in parameter
         // annotations, like this:
         //   def test(x: Union[str, T]) -> Union[str, T]
-        if (this._options.replaceUnsolved?.eliminateUnsolvedInUnions) {
-            if (
-                isTypeVar(preTransform) &&
-                this._shouldReplaceTypeVar(preTransform) &&
-                this._shouldReplaceUnsolvedTypeVar(preTransform)
-            ) {
-                const solutionSet = this._solution.getSolutionSet(this._activeConstraintSetIndex ?? 0);
-                const typeVarType = solutionSet.getType(preTransform);
+        if (!this._options.replaceUnsolved?.eliminateUnsolvedInUnions) {
+            return postTransform;
+        }
 
-                // Did the TypeVar remain unsolved?
-                if (!typeVarType || (isTypeVar(typeVarType) && TypeVarType.isUnification(typeVarType))) {
-                    // If the TypeVar was not transformed, then it was unsolved,
-                    // and we'll eliminate it.
-                    if (preTransform === postTransform) {
-                        return undefined;
-                    }
+        const solutionSet = this._solution.getSolutionSet(this._activeConstraintSetIndex ?? 0);
 
-                    // If useDefaultForUnsolved or useUnknownForUnsolved is true, the postTransform type will
-                    // be Unknown, which we want to eliminate.
-                    if (this._options.replaceUnsolved) {
-                        if (isUnknown(postTransform)) {
-                            return undefined;
-                        }
-                    }
+        if (isTypeVar(preTransform)) {
+            if (!this._shouldReplaceTypeVar(preTransform) || !this._shouldReplaceUnsolvedTypeVar(preTransform)) {
+                return postTransform;
+            }
+
+            const typeVarType = solutionSet.getType(preTransform);
+
+            // Did the TypeVar remain unsolved?
+            if (typeVarType) {
+                if (!isTypeVar(typeVarType) || !TypeVarType.isUnification(typeVarType)) {
+                    return postTransform;
+                }
+            }
+
+            // If the TypeVar was not transformed, then it was unsolved,
+            // and we'll eliminate it.
+            if (preTransform === postTransform) {
+                return undefined;
+            }
+
+            // If useDefaultForUnsolved or useUnknownForUnsolved is true, the postTransform type will
+            // be Unknown, which we want to eliminate.
+            if (this._options.replaceUnsolved && isUnknown(postTransform)) {
+                return undefined;
+            }
+        } else if (preTransform.props?.condition) {
+            // If this is a type that is conditioned on a unification TypeVar,
+            // see if TypeVar was solved. If not, eliminate the type.
+            for (const condition of preTransform.props.condition) {
+                if (TypeVarType.isUnification(condition.typeVar) && !solutionSet.getType(condition.typeVar)) {
+                    return undefined;
                 }
             }
         }

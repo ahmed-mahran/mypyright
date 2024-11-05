@@ -111,6 +111,7 @@ import {
     TypeAnnotationNode,
 } from '../parser/parseNodes';
 import { ParseFileResults } from '../parser/parser';
+import { Tokenizer } from '../parser/tokenizer';
 import {
     FStringStartToken,
     OperatorToken,
@@ -2894,7 +2895,10 @@ export class CompletionProvider {
                 paramInfo.kind !== ParamKind.Positional &&
                 paramInfo.kind !== ParamKind.ExpandedArgs
             ) {
-                if (!SymbolNameUtils.isPrivateOrProtectedName(paramInfo.param.name)) {
+                if (
+                    !SymbolNameUtils.isPrivateOrProtectedName(paramInfo.param.name) &&
+                    Tokenizer.isPythonIdentifier(paramInfo.param.name)
+                ) {
                     names.add(paramInfo.param.name);
                 }
             }
@@ -3184,7 +3188,10 @@ export class CompletionProvider {
         return (
             symbolType &&
             isClassInstance(symbolType) &&
-            ClassType.isSameGenericClass(symbolType, containingType) &&
+            ClassType.isSameGenericClass(
+                symbolType,
+                TypeBase.isInstance(containingType) ? containingType : ClassType.cloneAsInstance(containingType)
+            ) &&
             symbolType.priv.literalValue instanceof EnumLiteral
         );
     }
