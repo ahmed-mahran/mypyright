@@ -11,7 +11,13 @@ This is a fork of [Pyright](https://github.com/microsoft/pyright) with added fea
 
 # What is extra?
 
-## Multiple Unpackings of Type Arguments
+- [Multiple Unpackings of Type Arguments](#multiple-unpackings-of-type-arguments)
+- [Type Transformations of Variadic Type Variables](#type-transformations-of-variadic-type-variables)
+- [Subscriptable Functions](#subscriptable-functions)
+- [Static Type Programming (Type Macros)](#static-type-programming-type-macros)
+- [Static Type Transformations (Type Maps)](#static-type-transformations-type-maps)
+
+# Multiple Unpackings of Type Arguments
 
 [PEP-646](https://peps.python.org/pep-0646/#multiple-unpackings-in-a-tuple-not-allowed) did not allow multiple unpackings of tuples or type var tuples in tuple type arguments. E.g. only one unpacking may appear in a tuple:
 
@@ -109,7 +115,7 @@ def b6() -> tuple[Mark1, Mark2, Mark2, Mark2, Mark2]: ...
 reveal_type(b(b6())) # tuple[tuple[Mark2, Mark2, Mark2], tuple[()]]
 ```
 
-### Subscripted Variadic Type Variables
+## Subscripted Variadic Type Variables
 
 Variadic generics [PEP-646](https://peps.python.org/pep-0646/) doesn't handle [splitting](https://typing.readthedocs.io/en/latest/spec/generics.html#typevartuples-cannot-be-split). Consider the following pattern:
 
@@ -161,7 +167,7 @@ MyPyright resolves to this assignment:
 
 Remember that matching for variadic type variables is eager, that's why `*Vs` is matching as many variables as possible.
 
-#### Subscript Variables
+### Subscript Variables
 
 Another more interesting example:
 
@@ -193,7 +199,7 @@ In this context, it is sufficient to know the following:
 - `V2` is the next singular type variable which is assigned the next available adjacent index to the end of `*Mid` which is the `i1`'th index.
 - Finally `*Tail` is assigned the rest of `*Ps` from the next available index `i1 + 1` till the end.
 
-## Type Transformations of Variadic Type Variables
+# Type Transformations of Variadic Type Variables
 
 This is, in short, is about allowing type hinting transformations on individual type elements of a variadic type variable.
 
@@ -222,7 +228,7 @@ reveal_type(fn(int)) # Tuple[int]
 
 However, this is not currently possible with variadic generics. This is what this new feature is about.
 
-### `Map[F, *Ts]`
+## `Map[F, *Ts]`
 
 Similar to [this PEP draft](https://docs.google.com/document/d/1szTVcFyLznoDT7phtT-6Fpvp27XaBw9DmbTLHrB6BE4/edit), MyPyright adds a new typing extension, `Map[F, *Ts]`, where `F` must be a generic class of at least one type parameter. The first type parameter will be specialized for each type of `*Ts`.
 
@@ -343,7 +349,7 @@ Similar PEP drafts:
 - [A Map Operator for Variadic Type Variables](https://docs.google.com/document/d/1szTVcFyLznoDT7phtT-6Fpvp27XaBw9DmbTLHrB6BE4/edit).
 - [Type Transformations on Variadic Generics](https://discuss.python.org/t/pre-pep-considerations-and-feedback-type-transformations-on-variadic-generics/50605).
 
-## Subscriptable Functions
+# Subscriptable Functions
 
 It is common in typed tensor operations to pass dimension types as function arguments. Subscriptable functions imposes itself mainly for the following reasons:
 
@@ -402,7 +408,7 @@ def transpose(
 
 Now the type checker can correctly and as intended match function parameters with arguments and infer return type. Matching arguments to parameters leads to the assignment: `*Init = [A], *Mid = [C], *Tail = []`.
 
-### Implementation
+## Implementation
 
 MyPyright introduces function and method decorators as new typing extensions: `@subscriptable`, `@subscriptablefunction`, `@subscriptablemethod` and `@subscriptableclassmethod`. These convert functions/methods into objects implementing `__getitem__` dunder method. `@subscriptable` can be used with any function type or method type. Other decorators are special cases which save runtime checks performed by the general decorator `@subscriptable`.
 
@@ -455,7 +461,7 @@ reveal_type(x.transpose[B, D]) # () -> Tensor[A, D, C, B]
 reveal_type(x.transpose[B, D]()) # Tensor[A, D, C, B]
 ```
 
-#### Subscriptable Overloads
+### Subscriptable Overloads
 
 `@overload` can be used to decorate subscriptable signatures.
 
@@ -475,7 +481,7 @@ reveal_type(fn1[int]) # (a: int, b: None = None) -> int
 reveal_type(fn1[int, str]) # (a: int, b: str) -> tuple[int, str]
 ```
 
-##### TBD
+#### TBD
 
 `subscriptable` decorators should implement dunder `__call__` method so that `@overload` can be used. However, there are two possible ways to implement `__call__` and only one should be adopted:
 
@@ -507,7 +513,7 @@ reveal_type(fn1[int, str]) # (a: int, b: str) -> tuple[int, str]
   reveal_type(fn[str](1)) # tuple[int, str]
   ```
 
-#### Variadic Type Variable Parameter
+### Variadic Type Variable Parameter
 
 `TypeVarTuple` can be used as a subscriptable type parameters. This is only possible using [`Map`](#type-transformations-of-variadic-type-variables).
 
@@ -528,7 +534,7 @@ reveal_type(fn2[int, str]) # (t: int, str) -> tuple[int, str]
 reveal_type(fn2[int, str, float]) # (t: int, str, float) -> tuple[int, str, float]
 ```
 
-### This VS [PEP 718](https://peps.python.org/pep-0718/)
+## This VS [PEP 718](https://peps.python.org/pep-0718/)
 
 [PEP 718](https://peps.python.org/pep-0718/) is also about subscriptable functions. The following are key differences:
 
@@ -557,13 +563,13 @@ reveal_type(fn2[int, str, float]) # (t: int, str, float) -> tuple[int, str, floa
   reveal_type(fn_pep718[int, str](int, str)) # tuple[type[int], type[str]]
   ```
 
-## Static Type Programming (Type Macros)
+# Static Type Programming (Type Macros)
 
 This is in general about programming the static type checker to allow reasoning about complex type relations. The static type checker evaluates a type annotation to produce another type expression that has a simpler form or to further restrict and narrow a given type expression.
 
 The static type checker executes a user program at static type checking time which could be on a terminal as a side effect of executing the type checker commands, or at code edit time on the fly when the type checker is called through a language server within an IDE.
 
-### Static Type Transformations (Type Maps)
+## Static Type Transformations (Type Maps)
 
 This is about programming the static type checker to substitute a type hint with another computed type hint at static type checking time. For instance, the type checker could be programmed to transform `Add[float, int]` to a simpler form, `float`.
 
@@ -573,7 +579,7 @@ The type transformation is a mapping from a domain of types to another domain of
 
 The mapping could define a relation between types that is not necessarily a [subtyping](https://typing.readthedocs.io/en/latest/spec/glossary.html#term-subtype) relation. For example, in `tuple[int, str]`: neither `int`, `str` nor `tuple[int, str]` can be described as subtype of one another but in fact all are disjoint types, however `tuple` has defined a cartesian product relation between `int` and `str`.
 
-#### `TypeMap[*Params]`
+### `TypeMap[*Params]`
 
 MyPyright introduces `TypeMap`
 
@@ -585,7 +591,7 @@ class TypeMap[*Params]:
 
 `TypeMap` is a marker interface to define the type mapping logic through implementation of `map_type` class method. `origin` is a string representation in python syntax of the original type expression, e.g. `Add[float, int]`. `type_args` is a tuple of input types on which the computed type depends. Those are the type arguments given at the map usage site, e.g. `float` and `int` in case of `Add[float, int]`. `map_type` returns a string representation in python syntax of the computed either type expression or type definition.
 
-#### Returning a type expression
+### Returning a type expression
 
 In the following example, `map_type` returns a type expression. `Add` computes the lowest bound type when adding two variables of numeric types (only `int`, `float` and `Literal` are handled). `Add[A, B]` is a type map `Add: {int, float, Literal} x {int, float, Literal} -> {int, float, Literal}`.
 
@@ -623,7 +629,7 @@ reveal_type(add(1, 2)) # int
 reveal_type(add(1.0, 2)) # float
 ```
 
-#### Returning a type definition
+### Returning a type definition
 
 In the following example, `Sub[T]` computes a [nominal subtype](https://typing.readthedocs.io/en/latest/spec/concepts.html#nominal-and-structural-types) of the input type `T` as `map_type` returns a definition of a new (dummy) type with type `T` as a base class. Using a type definition instead of a type expression helps defining relations of maps to certain abstract type structures. This applies in cases where the [structure](https://typing.readthedocs.io/en/latest/spec/concepts.html#nominal-and-structural-types) of the type is of significance than its [name](https://typing.readthedocs.io/en/latest/spec/concepts.html#nominal-and-structural-types).
 
@@ -651,7 +657,7 @@ consume_dumdum(give_me_dumdum_child()) # OK
 reveal_type(give_me_dumdum_child()) # Sub_DumDum
 ```
 
-#### Function Call Analogy
+### Function Call Analogy
 
 Using a `TypeMap` implementation, e.g. `Add[float, T]`, as a type hint is analogous to a function call, e.g. `add(1.0, t)`. Similar to a function call where values and variables are provided as arguments within parentheses, a `TypeMap` is applied as a type hint in generics syntax where type arguments are provided within square brackets.
 
@@ -662,15 +668,15 @@ Using a `TypeMap` implementation, e.g. `Add[float, T]`, as a type hint is analog
 |**Arguments**  | values and variables | types and type variables |
 |**Enclosing**  | parenthesis          | square brackets          |
 
-#### TBD
+### TBD
 
 The following are points for further considerations to be thoroughly investigated and looked for.
 
-##### Marker interface or a `Protocol`
+#### Marker interface or a `Protocol`
 
 `Protocol` is the pythonic way to do it. It is enough to define a `map_type` class method to enable type mapping magic rather than needing to import and explicitly extend the marker interface `TypeMap`.
 
-##### Type representation
+#### Type representation
 
 Computed type must be in a representation that the type checker understands and converted from a representation that the user understands. The type checker must understand it because the type checker will process it, and the user must understand it because the user will produce it. Since every one/thing in this equation understands Python, representations in Python syntax is a natural choice.
 
@@ -678,15 +684,15 @@ However, constructing types (either expressions or definitions) via composition 
 
 This is a problem of code generation, and in general is handled by consrtuction or manipulation of [ASTs](https://docs.python.org/3/library/ast.html) by directly dealing with ASTs or through a friendly [quasi-quotes](https://docs.scala-lang.org/overviews/quasiquotes/intro.html) representation.
 
-##### `__class_getitem__` or `map_type`
+#### `__class_getitem__` or `map_type`
 
 Overriding `__class_getitem__` is indeed a plausible option. [The purpose of `__class_getitem__`](https://docs.python.org/3/reference/datamodel.html#the-purpose-of-class-getitem) is to allow type hinting of custom generic classes and using `__class_getitem__` on any class for purposes other than type hinting is discouraged. This makes it less susceptible to backward compatibility issues. However, `__class_getiem__` is expected to return `GenericAlias` object to be considered [properly defined](https://docs.python.org/3/reference/datamodel.html#class-getitem-versus-getitem).
 
-##### Runtime
+#### Runtime
 
 Runtime type checkers could simply opt-in by executing the type map to compute the new type.
 
-##### Code Organization
+#### Code Organization
 
 Type checker executes `map_type` which is a python code. This requires a convention for determining a python interpreter and a working directory. Consider the following file structure:
 
