@@ -595,48 +595,66 @@ MyPyright introduces `TypeMap`
 
 ```python
 class TypeMap[*Params]:
-  @classmethod
-  def map_type(cls, origin: str, type_args: tuple[type, ...]) -> str: ...
+  @staticmethod
+  def map_type(type_expr: str) -> str: ...
 ```
 
-`TypeMap` is a marker interface to define the type mapping logic through implementation of `map_type` class method. `origin` is a string representation in python syntax of the original type expression, e.g. `Add[float, int]`. `type_args` is a tuple of input types on which the computed type depends. Those are the type arguments given at the map usage site, e.g. `float` and `int` in case of `Add[float, int]`. `map_type` returns a string representation in python syntax of the computed either type expression or type definition.
+`TypeMap` is a marker interface to define the type mapping logic through implementation of `map_type` static method. `type_expr` is a string representation in python syntax of the original type expression, e.g. `Add[float, int]`. User can [parse](https://docs.python.org/3/library/ast.html#ast.parse) `type_expr` to construct an [AST](https://docs.python.org/3/library/ast.html#ast.AST). Constructing a runtime representation by [compiling](https://docs.python.org/3/library/functions.html#compile) and [evaluating](https://docs.python.org/3/library/functions.html#eval) the `type_expr` is discouraged mainly as some identifiers might be unresolvable given the scope of evaluation (e.g. type variables using the new syntax will not be in the scope of evaluation). The user then can extract type arguments on which the computed type depends. Those are the type arguments given at the map usage site, e.g. `float` and `int` in case of `Add[float, int]`. `map_type` returns a string representation in python syntax of the computed either type expression or type definition. The user can construct the type expression by string composition or by transforming the AST and converting to python syntax calling [ast.unparse()](https://docs.python.org/3/library/ast.html#ast.unparse).
 
 ### Returning a type expression
 
 In the following example, `map_type` returns a type expression. `Add` computes the lowest bound type when adding two variables of numeric types (only `int`, `float` and `Literal` are handled). `Add[A, B]` is a type map `Add: {int, float, Literal} x {int, float, Literal} -> {int, float, Literal}`.
 
 ```python
+import ast
 from mypyright_extensions import TypeMap
 
 class Add[A, B](TypeMap):
-  @classmethod
-  def map_type(cls, origin: str, type_args: tuple[type, ...]) -> str:
-    a, b = type_args
+  @staticmethod
+  def map_type(type_expr: str) -> str:
+    tree = cast(ast.Expr, ast.parse(type_expr).body[0]).value
+    match tree:
+      case ast.Subscript(value=ast.Name(id='Add'), slice=ast.Tuple(elts=[a, b])):
+        match (a, b):
 
-    if a is float or b is float:
-      return 'float' # float type expression
-    
-    def find_int_literal(x: type):
-      if getattr(x, '__origin__', None) is Literal and len(getattr(x, '__args__', ())) == 1:
-        return x.__args__[0]
-      if getattr(x, '__origin__', None) is type and len(getattr(x, '__args__', ())) == 1:
-        return find_int_literal(x.__args__[0])
-    a_lit = find_int_literal(a)
-    b_lit = find_int_literal(b)
-
-    if a_lit is not None and b_lit is not None:
-      return f'Literal[{a_lit + b_lit}]' # Literal type expression
-    
-    if a is int or b is int:
-      return 'int' # int type expression
+          case (ast.Name(id='float'), _) | (_, ast.Name(id='float')):
+            return 'float' # float type expression
+          
+          case (ast.Name(id='int'), _) | (_, ast.Name(id='int')):
+            return 'int' # int type expression
+          
+          case _:
+            current_a = a
+            current_b = b
+            type_depth = 0
+            while True:
+              match (current_a, current_b):
+                case (
+                  ast.Subscript(value=ast.Name(id='type'), slice=slice_a),
+                  ast.Subscript(value=ast.Name(id='type'), slice=slice_b)
+                  ):
+                  current_a = slice_a
+                  current_b = slice_b
+                  type_depth += 1
+                case (
+                  ast.Subscript(value=ast.Name(id='Literal'), slice=ast.Constant(value=value_a)),
+                  ast.Subscript(value=ast.Name(id='Literal'), slice=ast.Constant(value=value_b))
+                  ):
+                  return (
+                    ''.join(['type['] * type_depth) +
+                    f'Literal[{value_a + value_b}]' +
+                    ''.join([']'] * type_depth)
+                   ) # Literal type expression
+                case _:
+                  break
     
     return origin # the original type expression
 
 def add[A, B](a: A, b: B) -> Add[A, B]: ...
 
-reveal_type(add(type[Literal[1]], type[Literal[5]])) # Literal[6]
 reveal_type(add(1, 2)) # int
 reveal_type(add(1.0, 2)) # float
+reveal_type(add(type[Literal[1]], type[Literal[5]])) # type[type[Literal[6]]]
 ```
 
 ### Returning a type definition
@@ -644,13 +662,13 @@ reveal_type(add(1.0, 2)) # float
 In the following example, `Sub[T]` computes a [nominal subtype](https://typing.readthedocs.io/en/latest/spec/concepts.html#nominal-and-structural-types) of the input type `T` as `map_type` returns a definition of a new (dummy) type with type `T` as a base class. Using a type definition instead of a type expression helps defining relations of maps to certain abstract type structures. This applies in cases where the [structure](https://typing.readthedocs.io/en/latest/spec/concepts.html#nominal-and-structural-types) of the type is of significance than its [name](https://typing.readthedocs.io/en/latest/spec/concepts.html#nominal-and-structural-types).
 
 ```python
-from mypyright_extensions import TypeMap, print_type
+import ast
+from mypyright_extensions import TypeMap
 
 class Sub[T](TypeMap):
-  @classmethod
-  def map_type(cls, origin: str, type_args: tuple[type, ...]) -> str:
-    t = type_args[0]
-    bases = print_type(t)
+  @staticmethod
+  def map_type(type_expr: str) -> str:
+    bases = ast.unparse(cast(ast.Subscript, cast(ast.Expr, ast.parse(type_expr).body[0]).value).slice)
     name = 'Sub_' + bases.replace('[', '_').replace(']', '_').replace(',', '_').replace(' ', '')
     return f"class {name}({bases}): pass"
 
@@ -676,7 +694,7 @@ Using a `TypeMap` implementation, e.g. `Add[float, T]`, as a type hint is analog
 |**Example**    | `add(1.0, t)`        | `Add[float, T]`          |
 |**Application**| function call        | type hint                |
 |**Arguments**  | values and variables | types and type variables |
-|**Enclosing**  | parenthesis          | square brackets          |
+|**Enclosing**  | parentheses          | square brackets          |
 
 ### TBD
 
@@ -684,17 +702,19 @@ The following are points for further considerations to be thoroughly investigate
 
 #### Marker interface or a `Protocol`
 
-`Protocol` is the pythonic way to do it. It is enough to define a `map_type` class method to enable type mapping magic rather than needing to import and explicitly extend the marker interface `TypeMap`.
+`Protocol` is the pythonic way to do it. It is enough to define a `map_type` static method to enable type mapping magic rather than needing to import and explicitly extend the marker interface `TypeMap`.
 
 #### Type representation
 
-Types passed in or out of `map_type` method must be in a representation that both the user and the type checker understands. The type checker must understand it because the type checker will produce arguments and process returns, and the user must understand it because the user will process arguments and produce returns. Since every one/thing in this equation understands Python, representations in Python syntax is a natural choice.
+Types passed in or out of `map_type` method must be in a representation that both the user and the type checker understands. The type checker must understand it because the type checker will produce arguments and process returns, and the user must understand it because the user will process arguments and produce returns. Since every one/thing in this equation understands python, representations in python syntax is a natural choice.
 
 Constructing return types (either expressions or definitions) via composition of literal strings is not ideal but in fact is more error-prone as strings are not checked for syntax nor for type correctness and in general is not processed as a piece of code in the development environment.
 
-Also, while using runtime type representations as input arguments makes it easier and natural for Python user, it poses a challenge on the static type checker to produce such representation given type expressions and definitions and could possibly lead to unnecessary code execution if the checker to depend on the interpreter.
+On the other hand, using runtime type representations as input arguments makes it easier and natural for python user. Also, it provides refied access to lots of type information that are not available given the type expression alone (like whether an identifier refers to a type variable or an object of a specific class) and might be necessary to construct the new type. However, this poses a challenge on the static type checker to produce such representation given type expressions and definitions and could possibly lead to unnecessary code execution if the checker to depend on the interpreter.
 
 This is in general a problem of code generation, and could be handled by consrtuction or manipulation of [ASTs](https://docs.python.org/3/library/ast.html) by directly dealing with ASTs or through a friendly [quasi-quotes](https://docs.scala-lang.org/overviews/quasiquotes/intro.html) representation.
+
+Some extra type context information could be provided along with type expression.
 
 #### `__class_getitem__` or `map_type`
 

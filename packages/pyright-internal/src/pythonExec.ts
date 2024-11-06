@@ -27,11 +27,11 @@ export function initPythonExec(_rootDirectory: string, _interpreter: string[], _
     cwd = _cwd;
 }
 
-export function pythonExecTypeMap(file: string, typeMap: string) {
-    return pythonExec(file, typeMap, ['--map-type']);
+export function pythonExecTypeMap(file: string, typeMapType: string, typeMapExpr: string) {
+    return pythonExec(file, ['--map-type', typeMapType, typeMapExpr]);
 }
 
-export function pythonExec(file: string, code: string, args: string[]): ExecutionResult {
+export function pythonExec(file: string, args: string[], code?: string): ExecutionResult {
     if (!interpreter) {
         throw new Error('Python interpreter is not initialized, please restart!');
     }
@@ -51,11 +51,14 @@ export function pythonExec(file: string, code: string, args: string[]): Executio
     }
 
     let error: string | undefined = undefined;
+    const stderr = spawnResult.stderr.toString();
     if (spawnResult.status !== 0) {
         error = `Python exec returned with error code (${spawnResult.status}) cwd=${cwd} file=${file} args=[${args.join(
             ','
-        )}] code=${code}: ${spawnResult.stderr.toString()}`;
+        )}] code=${code}: ${stderr}`;
         console.error(error);
+    } else if (stderr.length > 0) {
+        console.log(`${stderr}`);
     }
 
     const output = spawnResult.stdout.toString();

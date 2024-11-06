@@ -845,7 +845,7 @@ export namespace MyPyrightExtensions {
         }
     }
 
-    function generateTypeMapPythonCode(type: Type, toPythonSyntax: (type: Type) => string) {
+    export function generateTypeMapPythonCode(type: Type, toPythonSyntax: (type: Type) => string) {
         //TODO this is vulnerable to deprecation of PEP 484 (TypeVar), PEP 612 (ParamSpec),
         // and PEP 646 (TypeVarTuple) in favor of PEP 695 (Type Parameter Syntax).
         const typeVars = getTypeVarArgsRecursive(type);
@@ -889,6 +889,7 @@ export namespace MyPyrightExtensions {
 
         if (
             isClass(type) &&
+            type.shared.declaration &&
             type.shared.baseClasses.some(
                 (baseType) => isClass(baseType) && baseType.shared.fullName === 'mypyright_extensions.TypeMap'
             ) &&
@@ -909,8 +910,8 @@ export namespace MyPyrightExtensions {
                 );
             };
 
-            const typeMapKey = toPythonSyntax(result);
-            if (evaluator.typeMapRecursionSet.has(typeMapKey)) {
+            const typeMapExpr = toPythonSyntax(type);
+            if (evaluator.typeMapRecursionSet.has(typeMapExpr)) {
                 // Guard against recursive type mapping; Map[T] => V => Map[V] => T ...
                 // If the type map returns a type which itself is a type map that returns
                 // maybe itself or a previously returned type, we need to detect this
@@ -918,15 +919,18 @@ export namespace MyPyrightExtensions {
                 return result;
             }
 
-            const fileInfo = getFileInfo(node);
-            const code = generateTypeMapPythonCode(type, toPythonSyntax);
-            const typeMapCallResult = pythonExecTypeMap(fileInfo.fileUri.getFilePath(), code);
+            const typeMapDeclFileInfo = getFileInfo(type.shared.declaration.node);
+            const typeMapCallResult = pythonExecTypeMap(
+                typeMapDeclFileInfo.fileUri.getFilePath(),
+                type.shared.name,
+                typeMapExpr
+            );
             if (typeMapCallResult.status) {
                 const parser = new Parser();
 
                 const parseOptions = new ParseOptions();
                 parseOptions.isStubFile = false;
-                parseOptions.pythonVersion = fileInfo.executionEnvironment.pythonVersion;
+                parseOptions.pythonVersion = typeMapDeclFileInfo.executionEnvironment.pythonVersion;
                 parseOptions.reportErrorsForParsedStringContents = true;
 
                 const parsingDiag = new DiagnosticSink();
@@ -943,7 +947,7 @@ export namespace MyPyrightExtensions {
                             )
                         );
                 } else {
-                    evaluator.typeMapRecursionSet.add(typeMapKey);
+                    evaluator.typeMapRecursionSet.add(typeMapExpr);
                     parseResults.parserOutput.parseTree.parent = node.parent;
                     setFileInfo(parseResults.parserOutput.parseTree, getFileInfo(node));
 
@@ -996,6 +1000,7 @@ export namespace MyPyrightExtensions {
                         }
 
                         if (printTypeMapResult) {
+                            const fileInfo = getFileInfo(node);
                             const range = convertOffsetsToRange(node.start, node.start + node.length, fileInfo.lines);
                             const lineNum = (range.start.line + 1).toString();
                             console.log(
@@ -1006,7 +1011,7 @@ export namespace MyPyrightExtensions {
                         }
                     }
 
-                    evaluator.typeMapRecursionSet.delete(typeMapKey);
+                    evaluator.typeMapRecursionSet.delete(typeMapExpr);
                 }
             } else if (typeMapCallResult.error) {
                 const diag = new DiagnosticAddendum();
