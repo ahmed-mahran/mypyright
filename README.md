@@ -9,6 +9,8 @@
 
 This is a fork of [Pyright](https://github.com/microsoft/pyright) with added features beyond accepted [typing PEPs](https://peps.python.org/topic/typing/) to support [typed tensors](https://github.com/ahmed-mahran/typedtensor).
 
+___
+
 # What is extra?
 
 - [Multiple Unpackings of Type Arguments](#multiple-unpackings-of-type-arguments)
@@ -16,6 +18,8 @@ This is a fork of [Pyright](https://github.com/microsoft/pyright) with added fea
 - [Subscriptable Functions](#subscriptable-functions)
 - [Static Type Programming (Type Macros)](#static-type-programming-type-macros)
 - [Static Type Transformations (Type Maps)](#static-type-transformations-type-maps)
+
+___
 
 # Multiple Unpackings of Type Arguments
 
@@ -199,6 +203,8 @@ In this context, it is sufficient to know the following:
 - `V2` is the next singular type variable which is assigned the next available adjacent index to the end of `*Mid` which is the `i1`'th index.
 - Finally `*Tail` is assigned the rest of `*Ps` from the next available index `i1 + 1` till the end.
 
+___
+
 # Type Transformations of Variadic Type Variables
 
 This is, in short, is about allowing type hinting transformations on individual type elements of a variadic type variable.
@@ -348,6 +354,8 @@ Similar PEP drafts:
 
 - [A Map Operator for Variadic Type Variables](https://docs.google.com/document/d/1szTVcFyLznoDT7phtT-6Fpvp27XaBw9DmbTLHrB6BE4/edit).
 - [Type Transformations on Variadic Generics](https://discuss.python.org/t/pre-pep-considerations-and-feedback-type-transformations-on-variadic-generics/50605).
+
+___
 
 # Subscriptable Functions
 
@@ -562,6 +570,8 @@ reveal_type(fn2[int, str, float]) # (t: int, str, float) -> tuple[int, str, floa
   def fn_pep718[*Ts](*args: *Ts) -> tuple[*Ts]
   reveal_type(fn_pep718[int, str](int, str)) # tuple[type[int], type[str]]
   ```
+
+___
 
 # Static Type Programming (Type Macros)
 
