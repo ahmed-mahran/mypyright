@@ -17,7 +17,7 @@ ___
 - [Type Transformations of Variadic Type Variables](#type-transformations-of-variadic-type-variables)
 - [Subscriptable Functions](#subscriptable-functions)
 - [Static Type Programming (Type Macros)](#static-type-programming-type-macros)
-- [Static Type Transformations (Type Maps)](#static-type-transformations-type-maps)
+  - [Static Type Transformations (Type Maps)](#static-type-transformations-type-maps)
 
 ___
 
