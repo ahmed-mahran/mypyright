@@ -688,11 +688,13 @@ The following are points for further considerations to be thoroughly investigate
 
 #### Type representation
 
-Computed type must be in a representation that the type checker understands and converted from a representation that the user understands. The type checker must understand it because the type checker will process it, and the user must understand it because the user will produce it. Since every one/thing in this equation understands Python, representations in Python syntax is a natural choice.
+Types passed in or out of `map_type` method must be in a representation that both the user and the type checker understands. The type checker must understand it because the type checker will produce arguments and process returns, and the user must understand it because the user will process arguments and produce returns. Since every one/thing in this equation understands Python, representations in Python syntax is a natural choice.
 
-However, constructing types (either expressions or definitions) via composition of literal strings is not ideal but in fact is more error-prone as strings are not checked for syntax nor for type correctness and in general is not processed as a piece of code in the development environment.
+Constructing return types (either expressions or definitions) via composition of literal strings is not ideal but in fact is more error-prone as strings are not checked for syntax nor for type correctness and in general is not processed as a piece of code in the development environment.
 
-This is a problem of code generation, and in general is handled by consrtuction or manipulation of [ASTs](https://docs.python.org/3/library/ast.html) by directly dealing with ASTs or through a friendly [quasi-quotes](https://docs.scala-lang.org/overviews/quasiquotes/intro.html) representation.
+Also, while using runtime type representations as input arguments makes it easier and natural for Python user, it poses a challenge on the static type checker to produce such representation given type expressions and definitions and could possibly lead to unnecessary code execution if the checker to depend on the interpreter.
+
+This is in general a problem of code generation, and could be handled by consrtuction or manipulation of [ASTs](https://docs.python.org/3/library/ast.html) by directly dealing with ASTs or through a friendly [quasi-quotes](https://docs.scala-lang.org/overviews/quasiquotes/intro.html) representation.
 
 #### `__class_getitem__` or `map_type`
 
