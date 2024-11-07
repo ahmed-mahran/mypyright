@@ -735,6 +735,13 @@ According to how python interpreter works, the whole python file `edit.py` must 
 
 A carefull convention must be set and followed to enforce separation and to reduce the scope of type checker executed code. Maybe a separate macros package could help the type checker in both purposes of executing and checking only macros code.
 
+#### Security
+
+Security is a major concern when it comes to code execution. This is has to be highlighted as a separate concern on its own. If code execution is inevitable, then it has to be restricted. Ideas for restriction:
+
+- Interpreter to provide a restricted mode for macros execution where a subset of the standard library is allowed. Alternatively, this could be done by the static type checker to analyze the code before calling the interpreter.
+- Enforce macros to deal only with symbols and literals e.g. [ast.literal_eval](https://docs.python.org/3/library/ast.html#ast.literal_eval).
+
 <!-- ### Static Type Predicates (Refinement Types) -->
 
 
