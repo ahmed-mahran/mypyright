@@ -27,11 +27,11 @@ export function initPythonExec(_rootDirectory: string, _interpreter: string[], _
     cwd = _cwd;
 }
 
-export function pythonExecTypeMap(file: string, typeMapType: string, typeMapExpr: string) {
-    return pythonExec(file, ['--map-type', typeMapType, typeMapExpr]);
+export function pythonExecTypeMap(typeMapExpr: string, symbolTableExpr: string) {
+    return pythonExec(['--map-type', typeMapExpr, '--symbol-table', symbolTableExpr]);
 }
 
-export function pythonExec(file: string, args: string[], code?: string): ExecutionResult {
+export function pythonExec(args: string[], code?: string): ExecutionResult {
     if (!interpreter) {
         throw new Error('Python interpreter is not initialized, please restart!');
     }
@@ -41,7 +41,7 @@ export function pythonExec(file: string, args: string[], code?: string): Executi
     }
 
     const pythonExecPath = path.join(rootDirectory, 'python_files', 'python_exec.py');
-    const spawnResult = ch.spawnSync(interpreter[0], [...interpreter.slice(1), pythonExecPath, '-f', file, ...args], {
+    const spawnResult = ch.spawnSync(interpreter[0], [...interpreter.slice(1), pythonExecPath, ...args], {
         input: code,
         cwd,
     });
@@ -53,7 +53,7 @@ export function pythonExec(file: string, args: string[], code?: string): Executi
     let error: string | undefined = undefined;
     const stderr = spawnResult.stderr.toString();
     if (spawnResult.status !== 0) {
-        error = `Python exec returned with error code (${spawnResult.status}) cwd=${cwd} file=${file} args=[${args.join(
+        error = `Python exec returned with code (${spawnResult.status}) cwd=${cwd} args=[${args.join(
             ','
         )}] code=${code}: ${stderr}`;
         console.error(error);
@@ -63,7 +63,7 @@ export function pythonExec(file: string, args: string[], code?: string): Executi
 
     const output = spawnResult.stdout.toString();
     if (logPythonExecOutput) {
-        console.log(`Python exec cwd=${cwd} file=${file} args=[${args.join(',')}] code=${code} output=${output}`);
+        console.log(`Python exec cwd=${cwd} args=[${args.join(',')}] code=${code} output=${output}`);
     }
     return {
         status: spawnResult.status === 0 && spawnResult.error === undefined,

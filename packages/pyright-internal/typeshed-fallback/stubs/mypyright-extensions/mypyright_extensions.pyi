@@ -1,5 +1,6 @@
 from abc import ABC
-from types import NoneType
+import ast
+from types import ModuleType, NoneType
 from typing import TYPE_CHECKING, Callable, Protocol, Self, Type
 
 if TYPE_CHECKING:
@@ -76,6 +77,33 @@ class subscriptableclassmethod[Owner, T, *Ts, **P, R]:
 
 #################################################################################################
 def print_type(tp: type) -> str: ...
+
+class TypeAsFunction[T, Result]:
+  base: type[T] | ast.expr
+  args: list[TypeAsFunction[T, Result]]
+  result: Result | None = None
+
+  def __init__(self, base: type[T] | ast.expr, args: list[TypeAsFunction[T, Result]] | None = None, result: Result | None = None): ...
+
+  def __repr__(self): ...
+
+class SymbolTable[T]:
+  symbol_table: dict[str, str]
+  reference_table: dict[str, type[T]]
+  processed_files: set[str]
+  module: ModuleType
+
+  def __init__(self, symbol_table: str | dict[str, str]) -> None: ...
+
+  def resolve_reference(self, reference: str) -> type[T] | None: ...
+
+def resolve_types[T, Result](
+    expr: ast.expr,
+    symbol_table: SymbolTable[T],
+    default_result: Result | None = None
+  ) -> TypeAsFunction[T, Result]: ...
+
+def parse_type_expr(type_expr: str) -> ast.expr: ...
 
 class TypeMap[*Params](ABC):
   @staticmethod

@@ -884,6 +884,14 @@ export namespace MyPyrightExtensions {
             .join(';');
     }
 
+    function toPythonSyntax(evaluator: TypeEvaluator, t: Type) {
+        return evaluator.printType(
+            //TODO when do you need to convert to instance instead?
+            TypeBase.isInstantiable(t) ? TypeBase.cloneTypeAsInstance(t, /* cache */ false) : t,
+            { enforcePythonSyntax: true }
+        );
+    }
+
     export function applyTypeMap(evaluator: TypeEvaluator, node: ParseNode, type: Type): Type {
         let result = type;
 
@@ -902,15 +910,7 @@ export namespace MyPyrightExtensions {
                 (type.shared.typeParams.length === 0 && node.nodeType === ParseNodeType.Name) ||
                 !(node.nodeType === ParseNodeType.Index || node.nodeType === ParseNodeType.Name))
         ) {
-            const toPythonSyntax = function (t: Type) {
-                return evaluator.printType(
-                    //TODO when do you need to convert to instance instead?
-                    TypeBase.isInstantiable(t) ? TypeBase.cloneTypeAsInstance(t, /* cache */ false) : t,
-                    { enforcePythonSyntax: true }
-                );
-            };
-
-            const typeMapExpr = toPythonSyntax(type);
+            const typeMapExpr = toPythonSyntax(evaluator, type);
             if (evaluator.typeMapRecursionSet.has(typeMapExpr)) {
                 // Guard against recursive type mapping; Map[T] => V => Map[V] => T ...
                 // If the type map returns a type which itself is a type map that returns
@@ -921,9 +921,8 @@ export namespace MyPyrightExtensions {
 
             const typeMapDeclFileInfo = getFileInfo(type.shared.declaration.node);
             const typeMapCallResult = pythonExecTypeMap(
-                typeMapDeclFileInfo.fileUri.getFilePath(),
-                type.shared.name,
-                typeMapExpr
+                typeMapExpr,
+                `{'${type.shared.name}':'${typeMapDeclFileInfo.fileUri.getFilePath()}'}`
             );
             if (typeMapCallResult.status) {
                 const parser = new Parser();
