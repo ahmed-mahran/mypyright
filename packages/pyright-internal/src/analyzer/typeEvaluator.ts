@@ -28720,6 +28720,9 @@ export function createTypeEvaluator(
         if (options?.useFullyQualifiedNames) {
             flags |= TypePrinter.PrintTypeFlags.UseFullyQualifiedNames;
         }
+        if (options?.printPredicatesAnnotation) {
+            flags |= TypePrinter.PrintTypeFlags.PrintPredicatesAnnotation;
+        }
 
         return TypePrinter.printType(type, flags, getEffectiveReturnType);
     }

@@ -884,11 +884,11 @@ export namespace MyPyrightExtensions {
             .join(';');
     }
 
-    function toPythonSyntax(evaluator: TypeEvaluator, t: Type) {
+    function toPythonSyntax(evaluator: TypeEvaluator, t: Type, enforceAnnotated: boolean = false) {
         return evaluator.printType(
             //TODO when do you need to convert to instance instead?
             TypeBase.isInstantiable(t) ? TypeBase.cloneTypeAsInstance(t, /* cache */ false) : t,
-            { enforcePythonSyntax: true }
+            { enforcePythonSyntax: true, printPredicatesAnnotation: enforceAnnotated }
         );
     }
 
@@ -1021,4 +1021,15 @@ export namespace MyPyrightExtensions {
 
         return result;
     }
+
+    export function isTypePredicate(type: Type) {
+        return (
+            isClass(type) &&
+            type.shared.mro.some(
+                (baseType) =>
+                    isClass(baseType) && baseType.shared.fullName === 'mypyright_extensions.TypeRefinementPredicate'
+            )
+        );
+    }
+
 }

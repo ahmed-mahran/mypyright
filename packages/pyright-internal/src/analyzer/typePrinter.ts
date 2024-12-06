@@ -10,6 +10,7 @@
 import { appendArray } from '../common/collectionUtils';
 import { assert } from '../common/debug';
 import { ParamCategory } from '../parser/parseNodes';
+import { MyPyrightExtensions } from './mypyrightExtensionsUtils';
 import { isTypedKwargs } from './parameterUtils';
 import * as ParseTreeUtils from './parseTreeUtils';
 import { printBytesLiteral, printStringLiteral } from './typePrinterUtils';
@@ -89,6 +90,9 @@ export const enum PrintTypeFlags {
 
     // Omit TypeVar scopes.
     OmitTypeVarScope = 1 << 13,
+
+    // Print Annotated types when annotation has predicates
+    PrintPredicatesAnnotation = 1 << 14,
 }
 
 export type FunctionReturnTypeCallback = (type: FunctionType) => Type;
@@ -203,6 +207,30 @@ function printTypeInternal(
     const originalPrintTypeFlags = printTypeFlags;
     const parenthesizeUnion = (printTypeFlags & PrintTypeFlags.ParenthesizeUnion) !== 0;
     printTypeFlags &= ~(PrintTypeFlags.ParenthesizeUnion | PrintTypeFlags.ParenthesizeCallable);
+
+    if ((printTypeFlags & PrintTypeFlags.PrintPredicatesAnnotation) !== 0) {
+        const predicates = (type.props?.annotatedTypeArgs ?? [])
+            .filter((arg) => MyPyrightExtensions.isTypePredicate(arg.type))
+            .map((predicate) => predicate.type);
+        if (predicates.length > 0) {
+            const typeText = printTypeInternal(
+                TypeBase.cloneWithAnnotatedTypeArgs(type, undefined),
+                printTypeFlags,
+                returnTypeCallback,
+                uniqueNameMap,
+                recursionTypes,
+                recursionCount
+            );
+            const predicatesTexts = predicates.map((predicate) =>
+                printType(
+                    TypeBase.isInstance(predicate) ? predicate : convertToInstance(predicate),
+                    printTypeFlags,
+                    returnTypeCallback
+                )
+            );
+            return `Annotated[${typeText}, ${predicatesTexts.join(', ')}]`;
+        }
+    }
 
     // If this is a type alias, see if we should use its name rather than
     // the type it represents.

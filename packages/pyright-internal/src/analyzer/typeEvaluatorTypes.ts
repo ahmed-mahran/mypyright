@@ -496,6 +496,7 @@ export interface PrintTypeOptions {
     printUnknownWithAny?: boolean;
     printTypeVarVariance?: boolean;
     omitTypeArgsIfUnknown?: boolean;
+    printPredicatesAnnotation?: boolean;
 }
 
 export interface DeclaredSymbolTypeInfo {
