@@ -16516,6 +16516,9 @@ export function createTypeEvaluator(
         const typeExprFlags = EvalFlags.TypeExpression | EvalFlags.NoConvertSpecialForm;
         if ((flags & typeExprFlags) === 0) {
             type = ClassType.cloneAsInstance(classType);
+            if (typeArgs && typeArgs.length >= 2) {
+                TypeBase.setAnnotatedTypeArgs(type, typeArgs.slice(1));
+            }
 
             if (typeArgs && typeArgs.length >= 1 && typeArgs[0].type.props?.typeForm) {
                 type = TypeBase.cloneWithTypeForm(type, typeArgs[0].type.props.typeForm);
@@ -16542,8 +16545,13 @@ export function createTypeEvaluator(
             addDiagnostic(DiagnosticRule.reportInvalidTypeForm, LocMessage.typeArgListNotAllowed(), typeArgs[0].node);
         }
 
+        const annotatedType = TypeBase.cloneAsSpecialForm(type, ClassType.cloneAsInstance(classType));
+        if (typeArgs && typeArgs.length >= 2) {
+            TypeBase.setAnnotatedTypeArgs(annotatedType, typeArgs.slice(1));
+        }
+
         return {
-            type: TypeBase.cloneAsSpecialForm(type, ClassType.cloneAsInstance(classType)),
+            type: annotatedType,
             isReadOnly: typeArgs[0].isReadOnly,
             isRequired: typeArgs[0].isRequired,
             isNotRequired: typeArgs[0].isNotRequired,

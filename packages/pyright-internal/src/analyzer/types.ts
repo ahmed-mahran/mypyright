@@ -14,6 +14,7 @@ import { ArgumentNode, ExpressionNode, NameNode, ParamCategory, TypeAnnotationNo
 import { ClassDeclaration, FunctionDeclaration, SpecialBuiltInClassDeclaration } from './declaration';
 import { MyPyrightExtensions } from './mypyrightExtensionsUtils';
 import { Symbol, SymbolTable } from './symbol';
+import { TypeResultWithNode } from './typeEvaluatorTypes';
 import { isTupleClass, isTypeVarSame } from './typeUtils';
 import { TypeWalker } from './typeWalker';
 
@@ -204,6 +205,12 @@ export interface TypeBaseProps {
 
     // Used only for types that are conditioned on a TypeVar
     condition: TypeCondition[] | undefined;
+
+    // When type is defined as Annotated[baseType, ...metaArgs]
+    // the type will be baseType and annotatedTypeArgs will be
+    // metaArgs, this is to keep reference to annotation meta
+    // data for refinement types use.
+    annotatedTypeArgs: TypeResultWithNode[] | undefined;
 }
 
 export interface TypeBase<T extends TypeCategory> {
@@ -249,6 +256,7 @@ export namespace TypeBase {
                 typeForm: undefined,
                 typeAliasInfo: undefined,
                 condition: undefined,
+                annotatedTypeArgs: undefined,
             };
         }
         return type.props;
@@ -286,6 +294,10 @@ export namespace TypeBase {
         TypeBase.addProps(type).condition = condition;
     }
 
+    export function setAnnotatedTypeArgs(type: TypeBase<any>, annotatedTypeArgs: TypeResultWithNode[] | undefined) {
+        TypeBase.addProps(type).annotatedTypeArgs = annotatedTypeArgs;
+    }
+
     export function cloneType<T extends TypeBase<any>>(type: T): T {
         const clone = { ...type };
         if (type.props) {
@@ -301,6 +313,15 @@ export namespace TypeBase {
     export function cloneAsSpecialForm<T extends TypeBase<any>>(type: T, specialForm: ClassType | undefined): T {
         const clone = TypeBase.cloneType(type);
         TypeBase.setSpecialForm(clone, specialForm);
+        return clone;
+    }
+
+    export function cloneWithAnnotatedTypeArgs<T extends TypeBase<any>>(
+        type: T,
+        annotatedTypeArgs: TypeResultWithNode[] | undefined
+    ): T {
+        const clone = TypeBase.cloneType(type);
+        TypeBase.setAnnotatedTypeArgs(clone, annotatedTypeArgs);
         return clone;
     }
 
