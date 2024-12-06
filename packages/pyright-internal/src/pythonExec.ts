@@ -31,6 +31,26 @@ export function pythonExecTypeMap(typeMapExpr: string, symbolTableExpr: string) 
     return pythonExec(['--map-type', typeMapExpr, '--symbol-table', symbolTableExpr]);
 }
 
+export function pythonExecRefineType(
+    typeExpr: string,
+    assumptionsExpr: string[],
+    testsExpr: string[],
+    symbolTableExpr: string,
+    typeVarTableExpr: string
+) {
+    const toListStr = function (list: string[]) {
+        return `[${list.map((item) => `'${item}'`).join(',')}]`;
+    };
+    return pythonExec([
+        '--refine-type',
+        `{'type': '${typeExpr}', 'assumptions': ${toListStr(assumptionsExpr)}, 'tests': ${toListStr(testsExpr)}}`,
+        '--symbol-table',
+        symbolTableExpr,
+        '--typevar-table',
+        typeVarTableExpr,
+    ]);
+}
+
 export function pythonExec(args: string[], code?: string): ExecutionResult {
     if (!interpreter) {
         throw new Error('Python interpreter is not initialized, please restart!');
