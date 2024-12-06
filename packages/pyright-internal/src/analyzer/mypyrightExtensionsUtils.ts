@@ -5,12 +5,12 @@ import { DiagnosticSink } from '../common/diagnosticSink';
 import { convertOffsetsToRange } from '../common/positionUtils';
 import { ExpressionNode, isExpressionNode, ParseNode, ParseNodeType } from '../parser/parseNodes';
 import { ParseOptions, Parser } from '../parser/parser';
-import { pythonExecTypeMap } from '../pythonExec';
+import { pythonExecRefineType, pythonExecTypeMap } from '../pythonExec';
 import { getFileInfo, setFileInfo } from './analyzerNodeInfo';
 import { ConstraintTracker } from './constraintTracker';
 import { printExpression } from './parseTreeUtils';
 import { ParseTreeWalker } from './parseTreeWalker';
-import { EvalFlags, TypeEvaluator, TypeResult } from './typeEvaluatorTypes';
+import { AssignTypeFlags, EvalFlags, TypeEvaluator, TypeResult, TypeResultWithNode } from './typeEvaluatorTypes';
 import {
     AnyType,
     ClassType,
@@ -19,6 +19,7 @@ import {
     isAnyUnknownOrObject,
     isClass,
     isTypeSame,
+    isTypeVar,
     isTypeVarTuple,
     isUnion,
     isUnknown,
@@ -44,6 +45,7 @@ import {
     mapSubtypes,
     specializeTupleClass,
 } from './typeUtils';
+import { TypeWalker } from './typeWalker';
 
 export namespace MyPyrightExtensions {
     export const printTypeMapResult: boolean = false;
@@ -1030,6 +1032,112 @@ export namespace MyPyrightExtensions {
                     isClass(baseType) && baseType.shared.fullName === 'mypyright_extensions.TypeRefinementPredicate'
             )
         );
+    }
+
+    export function assignRefinedType(
+        evaluator: TypeEvaluator,
+        destType: Type,
+        srcType: Type,
+        diag?: DiagnosticAddendum,
+        constraints?: ConstraintTracker,
+        flags = AssignTypeFlags.Default,
+        recursionCount = 0
+    ): boolean {
+        function collectRefinementTypeSymbols(
+            type: Type,
+            symbolTable: Map<string, string>,
+            typeVarBoundTable: Map<string, string | undefined>
+        ) {
+            class RefinementTypeSymbolsCollector extends TypeWalker {
+                override walk(type: Type): void {
+                    if (type.props?.annotatedTypeArgs && type.props?.annotatedTypeArgs?.length > 0) {
+                        for (const arg of type.props.annotatedTypeArgs) {
+                            this.walk(arg.type);
+                        }
+                    }
+                    super.walk(type);
+                }
+
+                override visitClass(classType: ClassType): void {
+                    if (isTypePredicate(classType)) {
+                        const file = classType.shared.declaration?.uri.getPath();
+                        if (file) {
+                            symbolTable.set(classType.shared.name, file);
+                        }
+                    }
+                    super.visitClass(classType);
+                }
+
+                override visitTypeVar(type: TypeVarType): void {
+                    // Collect symbols from type vars with annotated bounds
+                    if (type.shared.boundType) {
+                        const boundType = type.shared.boundType;
+                        typeVarBoundTable.set(
+                            type.shared.name,
+                            toPythonSyntax(evaluator, boundType, /* enforceAnnotated */ true)
+                        );
+                        this.walk(type.shared.boundType);
+                    } else {
+                        typeVarBoundTable.set(type.shared.name, undefined);
+                    }
+                }
+            }
+
+            if (isClass(type)) {
+                new RefinementTypeSymbolsCollector().walk(type);
+            }
+        }
+
+        function collectPredicates(type: Type): TypeResultWithNode[] {
+            const predicates = (type.props?.annotatedTypeArgs ?? []).filter((arg) => isTypePredicate(arg.type));
+            if (isTypeVar(type) && type.shared.boundType) {
+                predicates.push(...collectPredicates(type.shared.boundType));
+            }
+            return predicates;
+        }
+
+        const isContra = (flags & AssignTypeFlags.Contravariant) !== 0;
+        const testPredicates = collectPredicates(isContra ? srcType : destType);
+        const assumptionPredicates = collectPredicates(isContra ? destType : srcType);
+
+        const symbolTable: Map<string, string> = new Map();
+        const typeVarBoundTable: Map<string, string | undefined> = new Map();
+
+        testPredicates.forEach((arg) => collectRefinementTypeSymbols(arg.type, symbolTable, typeVarBoundTable));
+        assumptionPredicates.forEach((arg) => collectRefinementTypeSymbols(arg.type, symbolTable, typeVarBoundTable));
+
+        function mapToPythonDict(map: Map<string, string | undefined>): string {
+            const items: string[] = [];
+            for (const [key, value] of map.entries()) {
+                items.push(`'${key}': ${value === undefined ? `'None'` : `'${value}'`}`);
+            }
+            return `{${items.join(',')}}`;
+        }
+
+        const refineTypeCallResult = pythonExecRefineType(
+            toPythonSyntax(evaluator, srcType),
+            assumptionPredicates.map((assumption) =>
+                toPythonSyntax(evaluator, assumption.type, /* enforceAnnotated */ true)
+            ),
+            testPredicates.map((test) => toPythonSyntax(evaluator, test.type, /* enforceAnnotated */ true)),
+            mapToPythonDict(symbolTable),
+            mapToPythonDict(typeVarBoundTable)
+        );
+
+        if (refineTypeCallResult.status) {
+            if (refineTypeCallResult.output === 'Ok') {
+                return true;
+            }
+
+            if (diag) {
+                diag.addMessage(refineTypeCallResult.output);
+            }
+            return false;
+        } else if (refineTypeCallResult.error && diag) {
+            diag.addMessage(refineTypeCallResult.error);
+        }
+
+        return false;
     }
 
 }
