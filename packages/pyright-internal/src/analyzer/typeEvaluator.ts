@@ -24751,517 +24751,522 @@ export function createTypeEvaluator(
             return true;
         }
 
-        // If the source type is a special form, use the literal special form
-        // class rather than the symbolic form.
-        const specialForm = srcType.props?.specialForm;
-        if (specialForm) {
-            let isSpecialFormExempt = false;
+        function assignTypeInternal() {
+            // If the source type is a special form, use the literal special form
+            // class rather than the symbolic form.
+            const specialForm = srcType.props?.specialForm;
+            if (specialForm) {
+                let isSpecialFormExempt = false;
 
-            // A few special forms that are normally not compatible with type[T]
-            // are compatible specifically in the context of isinstance and issubclass.
-            if ((flags & AssignTypeFlags.AllowIsinstanceSpecialForms) !== 0) {
-                if (ClassType.isBuiltIn(specialForm, ['Callable', 'UnionType', 'Generic'])) {
+                // A few special forms that are normally not compatible with type[T]
+                // are compatible specifically in the context of isinstance and issubclass.
+                if ((flags & AssignTypeFlags.AllowIsinstanceSpecialForms) !== 0) {
+                    if (ClassType.isBuiltIn(specialForm, ['Callable', 'UnionType', 'Generic'])) {
+                        isSpecialFormExempt = true;
+                    }
+                }
+
+                if (
+                    MyPyrightExtensions.isMappedType(destType) ||
+                    MyPyrightExtensions.isMappedType(srcType) ||
+                    isTypeVar(destType) ||
+                    isTypeVar(srcType)
+                ) {
                     isSpecialFormExempt = true;
                 }
-            }
 
-            if (
-                MyPyrightExtensions.isMappedType(destType) ||
-                MyPyrightExtensions.isMappedType(srcType) ||
-                isTypeVar(destType) ||
-                isTypeVar(srcType)
-            ) {
-                isSpecialFormExempt = true;
-            }
-
-            if (!isSpecialFormExempt) {
-                if (srcType.props?.typeForm && !specialForm.props?.typeForm) {
-                    srcType = TypeBase.cloneWithTypeForm(specialForm, srcType.props.typeForm);
-                } else {
-                    srcType = specialForm;
-                }
-            }
-        }
-
-        if (recursionCount > maxTypeRecursionCount) {
-            return true;
-        }
-        recursionCount++;
-
-        const isAssigningToObject = function (destType: Type, srcType: Type) {
-            if (isClass(destType) && ClassType.isBuiltIn(destType, 'object')) {
-                if ((isInstantiableClass(destType) && TypeBase.isInstantiable(srcType)) || isClassInstance(destType)) {
-                    if ((flags & AssignTypeFlags.Invariant) === 0) {
-                        // All types (including None, Module, Overloaded) derive from object.
-                        return true;
+                if (!isSpecialFormExempt) {
+                    if (srcType.props?.typeForm && !specialForm.props?.typeForm) {
+                        srcType = TypeBase.cloneWithTypeForm(specialForm, srcType.props.typeForm);
+                    } else {
+                        srcType = specialForm;
                     }
                 }
             }
-            return false;
-        };
 
-        if (isAssigningToObject(destType, srcType)) {
-            return true;
-        }
+            if (recursionCount > maxTypeRecursionCount) {
+                return true;
+            }
+            recursionCount++;
 
-        if (MyPyrightExtensions.isMappedType(destType) || MyPyrightExtensions.isMappedType(srcType)) {
-            const mapSpecs = MyPyrightExtensions.deconstructMutualMappedTypes(evaluatorInterface, destType, srcType);
-            if (
-                !!mapSpecs &&
-                ((mapSpecs.destMapSpec.arg === undefined && mapSpecs.srcMapSpec.arg === undefined) ||
-                    (!!mapSpecs.destMapSpec.arg &&
-                        !!mapSpecs.srcMapSpec.arg &&
-                        assignType(
-                            mapSpecs.destMapSpec.arg,
-                            mapSpecs.srcMapSpec.arg,
-                            diag,
-                            constraints,
-                            flags,
-                            recursionCount
-                        )))
-            ) {
-                if (constraints) {
-                    // We need to verify that the original unmapped assignment is valid.
-                    // Consider this assignment: type[T] <== tuple[type[A], type[B]],
-                    // map = type and we resolve to the assignment T <== tuple[A, B].
-                    // If we substitute T back in the original assignment, we find that
-                    // it is not valid: type[tuple[A, B]] !== tuple[type[A], type[B]].
-                    // type doesn't commute with tuple. Also, map function might be
-                    // invariant in its argument such that if T1 is assignable to T2,
-                    // then F[T1] is not assignable to F[T2].
-                    function cloneUnsetFlagMappedIfMapped(type: Type) {
-                        return MyPyrightExtensions.isMappedType(type)
-                            ? MyPyrightExtensions.unsetFlagMapped(TypeBase.cloneType(type))
-                            : type;
-                    }
-                    const isContra = (flags & AssignTypeFlags.Contravariant) !== 0;
-                    if (hasTypeVar(isContra ? srcType : destType)) {
-                        const solvedType = solveAndApplyConstraints(isContra ? srcType : destType, constraints);
-                        if (!isTypeSame(solvedType, destType)) {
-                            return assignType(
-                                cloneUnsetFlagMappedIfMapped(isContra ? destType : solvedType),
-                                cloneUnsetFlagMappedIfMapped(isContra ? solvedType : srcType),
-                                diag,
-                                /* constraints */ undefined, //constraints?.clone(),
-                                flags,
-                                recursionCount
-                            );
+            const isAssigningToObject = function (destType: Type, srcType: Type) {
+                if (isClass(destType) && ClassType.isBuiltIn(destType, 'object')) {
+                    if (
+                        (isInstantiableClass(destType) && TypeBase.isInstantiable(srcType)) ||
+                        isClassInstance(destType)
+                    ) {
+                        if ((flags & AssignTypeFlags.Invariant) === 0) {
+                            // All types (including None, Module, Overloaded) derive from object.
+                            return true;
                         }
                     }
                 }
+                return false;
+            };
 
+            if (isAssigningToObject(destType, srcType)) {
                 return true;
             }
-            return false;
-        }
 
-        // If the source and dest refer to the recursive type aliases, handle
-        // the case specially to avoid recursing down both type aliases.
-        if (
-            isTypeVar(destType) &&
-            destType.shared.recursiveAlias &&
-            isTypeVar(srcType) &&
-            srcType.shared.recursiveAlias
-        ) {
-            const destAliasInfo = destType.props?.typeAliasInfo;
-            const srcAliasInfo = srcType.props?.typeAliasInfo;
-
-            // Do the source and dest refer to the same recursive type alias?
-            if (
-                destAliasInfo?.typeArgs &&
-                srcAliasInfo?.typeArgs &&
-                destType.shared.recursiveAlias.typeVarScopeId === srcType.shared.recursiveAlias.typeVarScopeId
-            ) {
-                return assignRecursiveTypeAliasToSelf(
-                    destAliasInfo,
-                    srcAliasInfo,
-                    diag,
-                    constraints,
-                    flags,
-                    recursionCount
+            if (MyPyrightExtensions.isMappedType(destType) || MyPyrightExtensions.isMappedType(srcType)) {
+                const mapSpecs = MyPyrightExtensions.deconstructMutualMappedTypes(
+                    evaluatorInterface,
+                    destType,
+                    srcType
                 );
-            } else {
-                // Have we already recursed once?
-                if ((flags & AssignTypeFlags.SkipRecursiveTypeCheck) !== 0) {
-                    return true;
-                }
-
-                // Note that we are comparing two recursive types and do
-                // not recursive more than once.
-                flags |= AssignTypeFlags.SkipRecursiveTypeCheck;
-            }
-        }
-
-        // If one or both of the types has an instantiable depth greater than
-        // zero, convert both to instances first.
-        if (TypeBase.isInstantiable(destType) && TypeBase.isInstantiable(srcType)) {
-            if (TypeBase.getInstantiableDepth(destType) > 0 || TypeBase.getInstantiableDepth(srcType) > 0) {
-                return assignType(
-                    convertToInstance(destType),
-                    convertToInstance(srcType),
-                    diag,
-                    constraints,
-                    flags,
-                    recursionCount
-                );
-            }
-        }
-
-        // Transform recursive type aliases if necessary.
-        const transformedDestType = transformPossibleRecursiveTypeAlias(evaluatorInterface, destType);
-        const transformedSrcType = transformPossibleRecursiveTypeAlias(evaluatorInterface, srcType);
-
-        // Did either the source or dest include recursive type aliases?
-        // If so, we could be dealing with different recursive type aliases
-        // or a recursive type alias and a recursive protocol definition.
-        if (
-            (transformedDestType !== destType && isUnion(transformedDestType)) ||
-            (transformedSrcType !== srcType && isUnion(transformedSrcType))
-        ) {
-            // Use a smaller recursive limit in this case to prevent runaway recursion.
-            if (recursionCount > maxRecursiveTypeAliasRecursionCount) {
-                // Add a special case for when the source is a str, which is itself
-                // a recursive type (since it derives from Sequence[str]).
-                if (isClassInstance(srcType) && ClassType.isBuiltIn(srcType, 'str') && isUnion(transformedDestType)) {
-                    return transformedDestType.priv.subtypes.some(
-                        (subtype) => isClassInstance(subtype) && ClassType.isBuiltIn(subtype, ['object', 'str'])
-                    );
-                }
-                return true;
-            }
-        }
-
-        destType = transformedDestType;
-        srcType = transformedSrcType;
-
-        // If the source or dest is unbound, allow the assignment. The
-        // error will be reported elsewhere.
-        if (isUnbound(destType) || isUnbound(srcType)) {
-            return true;
-        }
-
-        if (isTypeVar(destType)) {
-            if (isTypeVarSame(destType, srcType)) {
-                return true;
-            }
-
-            // If the dest is a constrained or bound type variable and all of the
-            // types in the source are conditioned on that same type variable
-            // and have compatible types, we'll consider it assignable.
-            if (assignConditionalTypeToTypeVar(destType, srcType, recursionCount)) {
-                return true;
-            }
-
-            // If the source is a conditional type associated with a bound TypeVar
-            // and the bound TypeVar matches the condition, the types are compatible.
-            const destTypeVar = destType;
-            if (
-                TypeBase.isInstantiable(destType) === TypeBase.isInstantiable(srcType) &&
-                srcType.props?.condition &&
-                srcType.props.condition.some((cond) => {
-                    return (
-                        !TypeVarType.hasConstraints(cond.typeVar) &&
-                        cond.typeVar.priv.nameWithScope === destTypeVar.priv.nameWithScope
-                    );
-                })
-            ) {
-                return true;
-            }
-
-            if (isUnion(srcType)) {
-                const srcWithoutAny = removeFromUnion(srcType, (type) => isAnyOrUnknown(type));
-                if (isTypeSame(destType, srcWithoutAny)) {
-                    return true;
-                }
-            }
-
-            // Handle the special case where both types are Self types. We'll allow
-            // them to be treated as equivalent to handle certain common idioms.
-            if (
-                isTypeVar(srcType) &&
-                TypeVarType.isSelf(srcType) &&
-                TypeVarType.hasBound(srcType) &&
-                TypeVarType.isSelf(destType) &&
-                TypeVarType.hasBound(destType) &&
-                TypeVarType.isBound(destType) === TypeVarType.isBound(srcType) &&
-                TypeBase.isInstance(srcType) === TypeBase.isInstance(destType)
-            ) {
-                if ((flags & AssignTypeFlags.Contravariant) === 0 && constraints) {
-                    assignTypeVar(evaluatorInterface, destType, srcType, diag, constraints, flags, recursionCount);
-                }
-                return true;
-            }
-
-            // If the dest is a TypeVarTuple, and the source is a tuple
-            // with a single entry that is the same TypeVarTuple, it's a match.
-            if (
-                isTypeVarTuple(destType) &&
-                isClassInstance(srcType) &&
-                isTupleClass(srcType) &&
-                srcType.priv.tupleTypeArgs &&
-                srcType.priv.tupleTypeArgs.length === 1
-            ) {
-                if (isTypeSame(destType, srcType.priv.tupleTypeArgs[0].type, {}, recursionCount)) {
-                    return true;
-                }
-            }
-
-            if ((flags & AssignTypeFlags.Contravariant) === 0 || !hasTypeVar(srcType)) {
-                // if (
-                //     assignTypeVar(evaluatorInterface, destType, srcType, diag, constraints, flags, recursionCount) &&
-                //     (!isAnyOrUnknown(srcType) || (flags & AssignTypeFlags.OverloadOverlap) === 0)
-                // ) {
-                //     return true;
-                // }
-                if (!assignTypeVar(evaluatorInterface, destType, srcType, diag, constraints, flags, recursionCount)) {
-                    return false;
-                }
-
-                if (isAnyOrUnknown(srcType) && (flags & AssignTypeFlags.OverloadOverlap) !== 0) {
-                    return false;
-                }
-
-                return true;
-            }
-        }
-
-        if (isTypeVar(srcType)) {
-            if ((flags & AssignTypeFlags.Contravariant) !== 0) {
-                if (TypeVarType.isBound(srcType)) {
-                    return assignType(
-                        makeTopLevelTypeVarsConcrete(destType),
-                        makeTopLevelTypeVarsConcrete(srcType),
-                        diag,
-                        /* constraints */ undefined,
-                        flags,
-                        recursionCount
-                    );
-                }
-
-                if (assignTypeVar(evaluatorInterface, srcType, destType, diag, constraints, flags, recursionCount)) {
-                    return true;
-                }
-
-                // If the dest type is a union, only one of the subtypes needs to match.
-                let isAssignable = false;
-                if (isUnion(destType)) {
-                    doForEachSubtype(destType, (destSubtype) => {
-                        if (
-                            assignTypeVar(
-                                evaluatorInterface,
-                                srcType as TypeVarType,
-                                destSubtype,
+                if (
+                    !!mapSpecs &&
+                    ((mapSpecs.destMapSpec.arg === undefined && mapSpecs.srcMapSpec.arg === undefined) ||
+                        (!!mapSpecs.destMapSpec.arg &&
+                            !!mapSpecs.srcMapSpec.arg &&
+                            assignType(
+                                mapSpecs.destMapSpec.arg,
+                                mapSpecs.srcMapSpec.arg,
                                 diag,
                                 constraints,
                                 flags,
                                 recursionCount
-                            )
-                        ) {
-                            isAssignable = true;
+                            )))
+                ) {
+                    if (constraints) {
+                        // We need to verify that the original unmapped assignment is valid.
+                        // Consider this assignment: type[T] <== tuple[type[A], type[B]],
+                        // map = type and we resolve to the assignment T <== tuple[A, B].
+                        // If we substitute T back in the original assignment, we find that
+                        // it is not valid: type[tuple[A, B]] !== tuple[type[A], type[B]].
+                        // type doesn't commute with tuple. Also, map function might be
+                        // invariant in its argument such that if T1 is assignable to T2,
+                        // then F[T1] is not assignable to F[T2].
+                        function cloneUnsetFlagMappedIfMapped(type: Type) {
+                            return MyPyrightExtensions.isMappedType(type)
+                                ? MyPyrightExtensions.unsetFlagMapped(TypeBase.cloneType(type))
+                                : type;
                         }
-                    });
-                }
-                return isAssignable;
-            }
+                        const isContra = (flags & AssignTypeFlags.Contravariant) !== 0;
+                        if (hasTypeVar(isContra ? srcType : destType)) {
+                            const solvedType = solveAndApplyConstraints(isContra ? srcType : destType, constraints);
+                            if (!isTypeSame(solvedType, destType)) {
+                                return assignType(
+                                    cloneUnsetFlagMappedIfMapped(isContra ? destType : solvedType),
+                                    cloneUnsetFlagMappedIfMapped(isContra ? solvedType : srcType),
+                                    diag,
+                                    /* constraints */ undefined, //constraints?.clone(),
+                                    flags,
+                                    recursionCount
+                                );
+                            }
+                        }
+                    }
 
-            if ((flags & AssignTypeFlags.Invariant) !== 0) {
-                if (isAnyOrUnknown(destType)) {
                     return true;
                 }
-
-                // If the source is a ParamSpec and the dest is a "...", this is
-                // effectively like an "Any" signature, so we'll treat it as though
-                // it's Any.
-                if (
-                    isParamSpec(srcType) &&
-                    isFunction(destType) &&
-                    FunctionType.isGradualCallableForm(destType) &&
-                    destType.shared.parameters.length <= 2
-                ) {
-                    return true;
-                }
-
-                // If the source is an unpacked TypeVarTuple and the dest is a
-                // *tuple[Any, ...], we'll treat it as compatible.
-                if (
-                    isUnpackedTypeVarTuple(srcType) &&
-                    isClassInstance(destType) &&
-                    isUnpackedClass(destType) &&
-                    destType.priv.tupleTypeArgs &&
-                    destType.priv.tupleTypeArgs.length === 1 &&
-                    destType.priv.tupleTypeArgs[0].isUnbounded &&
-                    isAnyOrUnknown(destType.priv.tupleTypeArgs[0].type)
-                ) {
-                    return true;
-                }
-
-                if (!isUnion(destType)) {
-                    diag?.addMessage(LocAddendum.typeAssignmentMismatch().format(printSrcDestTypes(srcType, destType)));
-                    return false;
-                }
-            }
-        }
-
-        if (isAnyOrUnknown(destType)) {
-            return true;
-        }
-
-        if (isAnyOrUnknown(srcType) && !srcType.props?.specialForm) {
-            if (constraints) {
-                // If it's an ellipsis type, convert it to a regular "Any"
-                // type. These are functionally equivalent, but "Any" looks
-                // better in the text representation.
-                const typeVarSubstitution = isEllipsisType(srcType) ? AnyType.create() : srcType;
-                setConstraintsForFreeTypeVars(destType, typeVarSubstitution, constraints);
-            }
-            if ((flags & AssignTypeFlags.OverloadOverlap) === 0) {
-                return true;
-            }
-        }
-
-        if (isNever(srcType)) {
-            if ((flags & AssignTypeFlags.Invariant) !== 0) {
-                if (isNever(destType)) {
-                    return true;
-                }
-
-                diag?.addMessage(LocAddendum.typeAssignmentMismatch().format(printSrcDestTypes(srcType, destType)));
                 return false;
             }
 
-            if (constraints) {
-                setConstraintsForFreeTypeVars(destType, UnknownType.create(), constraints);
-            }
-            return true;
-        }
+            // If the source and dest refer to the recursive type aliases, handle
+            // the case specially to avoid recursing down both type aliases.
+            if (
+                isTypeVar(destType) &&
+                destType.shared.recursiveAlias &&
+                isTypeVar(srcType) &&
+                srcType.shared.recursiveAlias
+            ) {
+                const destAliasInfo = destType.props?.typeAliasInfo;
+                const srcAliasInfo = srcType.props?.typeAliasInfo;
 
-        if (isUnion(destType)) {
-            // If both the source and dest are unions, use assignFromUnionType which has
-            // special-case logic to handle this case.
-            if (isUnion(srcType)) {
-                return assignFromUnionType(destType, srcType, diag, constraints, flags, recursionCount);
-            }
-
-            const clonedConstraints = constraints?.clone();
-            if (assignToUnionType(destType, srcType, /* diag */ undefined, clonedConstraints, flags, recursionCount)) {
-                if (constraints && clonedConstraints) {
-                    constraints.copyFromClone(clonedConstraints);
-                }
-                return true;
-            }
-        }
-
-        // Not sure why we need to makeTopLevelTypeVarsConcrete?
-        // - This loses opportunity to replace one type var by another (e.g. instead of A = B this makes A = object)
-        //   which is less preferred from a user perspective and loses opportunity of transitive type var resolution
-        //   (e.g. later on when B is resolved then we can resolve A)
-        // - makeTopLevelTypeVarsConcrete maybe reduces chances of recursion (e.g. A is bound to a type that uses B
-        //   and B is bound to a type that uses A, this can lead to recursive nested resolutions A[B[A[B[...]]]])
-        // - In case of contravariant assignment, we need to keep src type vars
-        const expandedSrcType = makeTopLevelTypeVarsConcrete(srcType);
-        // if (isUnion(expandedSrcType)) {
-        //     return assignFromUnionType(destType, expandedSrcType, diag, constraints, flags, recursionCount);
-        // }
-        if (isUnion(srcType)) {
-            return assignFromUnionType(destType, srcType, diag, constraints, flags, recursionCount);
-        }
-
-        if (isUnion(destType)) {
-            return assignToUnionType(destType, srcType, diag, constraints, flags, recursionCount);
-        }
-
-        // Is the src a specialized "type" object?
-        if (isClassInstance(expandedSrcType) && ClassType.isBuiltIn(expandedSrcType, 'type')) {
-            const srcTypeArgs = expandedSrcType.priv.typeArgs;
-            let typeTypeArg: Type;
-
-            if (srcTypeArgs && srcTypeArgs.length >= 1) {
-                typeTypeArg = srcTypeArgs[0];
-            } else {
-                typeTypeArg = UnknownType.create();
-            }
-
-            if (isAnyOrUnknown(typeTypeArg)) {
-                if (isEffectivelyInstantiable(destType)) {
-                    return true;
-                }
-            } else if (isClassInstance(typeTypeArg) || isTypeVar(typeTypeArg)) {
+                // Do the source and dest refer to the same recursive type alias?
                 if (
-                    assignType(
-                        destType,
-                        convertToInstantiable(typeTypeArg),
-                        diag?.createAddendum(),
+                    destAliasInfo?.typeArgs &&
+                    srcAliasInfo?.typeArgs &&
+                    destType.shared.recursiveAlias.typeVarScopeId === srcType.shared.recursiveAlias.typeVarScopeId
+                ) {
+                    return assignRecursiveTypeAliasToSelf(
+                        destAliasInfo,
+                        srcAliasInfo,
+                        diag,
                         constraints,
                         flags,
                         recursionCount
-                    )
+                    );
+                } else {
+                    // Have we already recursed once?
+                    if ((flags & AssignTypeFlags.SkipRecursiveTypeCheck) !== 0) {
+                        return true;
+                    }
+
+                    // Note that we are comparing two recursive types and do
+                    // not recursive more than once.
+                    flags |= AssignTypeFlags.SkipRecursiveTypeCheck;
+                }
+            }
+
+            // If one or both of the types has an instantiable depth greater than
+            // zero, convert both to instances first.
+            if (TypeBase.isInstantiable(destType) && TypeBase.isInstantiable(srcType)) {
+                if (TypeBase.getInstantiableDepth(destType) > 0 || TypeBase.getInstantiableDepth(srcType) > 0) {
+                    return assignType(
+                        convertToInstance(destType),
+                        convertToInstance(srcType),
+                        diag,
+                        constraints,
+                        flags,
+                        recursionCount
+                    );
+                }
+            }
+
+            // Transform recursive type aliases if necessary.
+            const transformedDestType = transformPossibleRecursiveTypeAlias(evaluatorInterface, destType);
+            const transformedSrcType = transformPossibleRecursiveTypeAlias(evaluatorInterface, srcType);
+
+            // Did either the source or dest include recursive type aliases?
+            // If so, we could be dealing with different recursive type aliases
+            // or a recursive type alias and a recursive protocol definition.
+            if (
+                (transformedDestType !== destType && isUnion(transformedDestType)) ||
+                (transformedSrcType !== srcType && isUnion(transformedSrcType))
+            ) {
+                // Use a smaller recursive limit in this case to prevent runaway recursion.
+                if (recursionCount > maxRecursiveTypeAliasRecursionCount) {
+                    // Add a special case for when the source is a str, which is itself
+                    // a recursive type (since it derives from Sequence[str]).
+                    if (
+                        isClassInstance(srcType) &&
+                        ClassType.isBuiltIn(srcType, 'str') &&
+                        isUnion(transformedDestType)
+                    ) {
+                        return transformedDestType.priv.subtypes.some(
+                            (subtype) => isClassInstance(subtype) && ClassType.isBuiltIn(subtype, ['object', 'str'])
+                        );
+                    }
+                    return true;
+                }
+            }
+
+            destType = transformedDestType;
+            srcType = transformedSrcType;
+
+            // If the source or dest is unbound, allow the assignment. The
+            // error will be reported elsewhere.
+            if (isUnbound(destType) || isUnbound(srcType)) {
+                return true;
+            }
+
+            if (isTypeVar(destType)) {
+                if (isTypeVarSame(destType, srcType)) {
+                    return true;
+                }
+
+                // If the dest is a constrained or bound type variable and all of the
+                // types in the source are conditioned on that same type variable
+                // and have compatible types, we'll consider it assignable.
+                if (assignConditionalTypeToTypeVar(destType, srcType, recursionCount)) {
+                    return true;
+                }
+
+                // If the source is a conditional type associated with a bound TypeVar
+                // and the bound TypeVar matches the condition, the types are compatible.
+                const destTypeVar = destType;
+                if (
+                    TypeBase.isInstantiable(destType) === TypeBase.isInstantiable(srcType) &&
+                    srcType.props?.condition &&
+                    srcType.props.condition.some((cond) => {
+                        return (
+                            !TypeVarType.hasConstraints(cond.typeVar) &&
+                            cond.typeVar.priv.nameWithScope === destTypeVar.priv.nameWithScope
+                        );
+                    })
                 ) {
                     return true;
                 }
 
-                diag?.addMessage(LocAddendum.typeAssignmentMismatch().format(printSrcDestTypes(srcType, destType)));
-                return false;
-            }
-        }
+                if (isUnion(srcType)) {
+                    const srcWithoutAny = removeFromUnion(srcType, (type) => isAnyOrUnknown(type));
+                    if (isTypeSame(destType, srcWithoutAny)) {
+                        return true;
+                    }
+                }
 
-        if (isInstantiableClass(destType)) {
-            if (isInstantiableClass(expandedSrcType)) {
-                // PEP 544 says that if the dest type is a type[Proto] class,
-                // the source must be a "concrete" (non-protocol) class.
-                if (ClassType.isProtocolClass(destType)) {
+                // Handle the special case where both types are Self types. We'll allow
+                // them to be treated as equivalent to handle certain common idioms.
+                if (
+                    isTypeVar(srcType) &&
+                    TypeVarType.isSelf(srcType) &&
+                    TypeVarType.hasBound(srcType) &&
+                    TypeVarType.isSelf(destType) &&
+                    TypeVarType.hasBound(destType) &&
+                    TypeVarType.isBound(destType) === TypeVarType.isBound(srcType) &&
+                    TypeBase.isInstance(srcType) === TypeBase.isInstance(destType)
+                ) {
+                    if ((flags & AssignTypeFlags.Contravariant) === 0 && constraints) {
+                        assignTypeVar(evaluatorInterface, destType, srcType, diag, constraints, flags, recursionCount);
+                    }
+                    return true;
+                }
+
+                // If the dest is a TypeVarTuple, and the source is a tuple
+                // with a single entry that is the same TypeVarTuple, it's a match.
+                if (
+                    isTypeVarTuple(destType) &&
+                    isClassInstance(srcType) &&
+                    isTupleClass(srcType) &&
+                    srcType.priv.tupleTypeArgs &&
+                    srcType.priv.tupleTypeArgs.length === 1
+                ) {
+                    if (isTypeSame(destType, srcType.priv.tupleTypeArgs[0].type, {}, recursionCount)) {
+                        return true;
+                    }
+                }
+
+                if ((flags & AssignTypeFlags.Contravariant) === 0 || !hasTypeVar(srcType)) {
+                    // if (
+                    //     assignTypeVar(evaluatorInterface, destType, srcType, diag, constraints, flags, recursionCount) &&
+                    //     (!isAnyOrUnknown(srcType) || (flags & AssignTypeFlags.OverloadOverlap) === 0)
+                    // ) {
+                    //     return true;
+                    // }
                     if (
-                        (flags & AssignTypeFlags.AllowProtocolClassSource) === 0 &&
-                        ClassType.isProtocolClass(expandedSrcType) &&
-                        isInstantiableClass(srcType) &&
-                        !srcType.priv.includeSubclasses
+                        !assignTypeVar(evaluatorInterface, destType, srcType, diag, constraints, flags, recursionCount)
                     ) {
+                        return false;
+                    }
+
+                    if (isAnyOrUnknown(srcType) && (flags & AssignTypeFlags.OverloadOverlap) !== 0) {
+                        return false;
+                    }
+
+                    return true;
+                }
+            }
+
+            if (isTypeVar(srcType)) {
+                if ((flags & AssignTypeFlags.Contravariant) !== 0) {
+                    if (TypeVarType.isBound(srcType)) {
+                        return assignType(
+                            makeTopLevelTypeVarsConcrete(destType),
+                            makeTopLevelTypeVarsConcrete(srcType),
+                            diag,
+                            /* constraints */ undefined,
+                            flags,
+                            recursionCount
+                        );
+                    }
+
+                    if (
+                        assignTypeVar(evaluatorInterface, srcType, destType, diag, constraints, flags, recursionCount)
+                    ) {
+                        return true;
+                    }
+
+                    // If the dest type is a union, only one of the subtypes needs to match.
+                    let isAssignable = false;
+                    if (isUnion(destType)) {
+                        doForEachSubtype(destType, (destSubtype) => {
+                            if (
+                                assignTypeVar(
+                                    evaluatorInterface,
+                                    srcType as TypeVarType,
+                                    destSubtype,
+                                    diag,
+                                    constraints,
+                                    flags,
+                                    recursionCount
+                                )
+                            ) {
+                                isAssignable = true;
+                            }
+                        });
+                    }
+                    return isAssignable;
+                }
+
+                if ((flags & AssignTypeFlags.Invariant) !== 0) {
+                    if (isAnyOrUnknown(destType)) {
+                        return true;
+                    }
+
+                    // If the source is a ParamSpec and the dest is a "...", this is
+                    // effectively like an "Any" signature, so we'll treat it as though
+                    // it's Any.
+                    if (
+                        isParamSpec(srcType) &&
+                        isFunction(destType) &&
+                        FunctionType.isGradualCallableForm(destType) &&
+                        destType.shared.parameters.length <= 2
+                    ) {
+                        return true;
+                    }
+
+                    // If the source is an unpacked TypeVarTuple and the dest is a
+                    // *tuple[Any, ...], we'll treat it as compatible.
+                    if (
+                        isUnpackedTypeVarTuple(srcType) &&
+                        isClassInstance(destType) &&
+                        isUnpackedClass(destType) &&
+                        destType.priv.tupleTypeArgs &&
+                        destType.priv.tupleTypeArgs.length === 1 &&
+                        destType.priv.tupleTypeArgs[0].isUnbounded &&
+                        isAnyOrUnknown(destType.priv.tupleTypeArgs[0].type)
+                    ) {
+                        return true;
+                    }
+
+                    if (!isUnion(destType)) {
                         diag?.addMessage(
-                            LocAddendum.protocolSourceIsNotConcrete().format({
-                                sourceType: printType(convertToInstance(srcType)),
-                                destType: printType(destType),
-                            })
+                            LocAddendum.typeAssignmentMismatch().format(printSrcDestTypes(srcType, destType))
                         );
                         return false;
                     }
                 }
+            }
 
-                if (ClassType.isBuiltIn(destType, 'type') && (srcType.props?.instantiableDepth ?? 0) > 0) {
+            if (isAnyOrUnknown(destType)) {
+                return true;
+            }
+
+            if (isAnyOrUnknown(srcType) && !srcType.props?.specialForm) {
+                if (constraints) {
+                    // If it's an ellipsis type, convert it to a regular "Any"
+                    // type. These are functionally equivalent, but "Any" looks
+                    // better in the text representation.
+                    const typeVarSubstitution = isEllipsisType(srcType) ? AnyType.create() : srcType;
+                    setConstraintsForFreeTypeVars(destType, typeVarSubstitution, constraints);
+                }
+                if ((flags & AssignTypeFlags.OverloadOverlap) === 0) {
                     return true;
                 }
+            }
 
-                if (isSpecialFormClass(expandedSrcType, flags)) {
-                    // Special form classes are compatible only with other special form
-                    // classes, not with 'object' or 'type'.
-                    const destSpecialForm = destType.props?.specialForm ?? destType;
-                    if (isSpecialFormClass(destSpecialForm, flags)) {
-                        return assignType(destSpecialForm, expandedSrcType, diag, constraints, flags, recursionCount);
+            if (isNever(srcType)) {
+                if ((flags & AssignTypeFlags.Invariant) !== 0) {
+                    if (isNever(destType)) {
+                        return true;
                     }
-                } else if (
-                    assignClass(
-                        destType,
-                        expandedSrcType,
-                        diag,
-                        constraints,
-                        flags,
-                        recursionCount,
-                        /* reportErrorsUsingObjType */ false
-                    )
-                ) {
-                    return true;
+
+                    diag?.addMessage(LocAddendum.typeAssignmentMismatch().format(printSrcDestTypes(srcType, destType)));
+                    return false;
                 }
 
-                diag?.addMessage(LocAddendum.typeAssignmentMismatch().format(printSrcDestTypes(srcType, destType)));
-                return false;
-            } else if (isClassInstance(expandedSrcType) && isMetaclassInstance(expandedSrcType)) {
-                // If the source is a metaclass instance, verify that it's compatible with
-                // the metaclass of the instantiable dest type.
-                const destMetaclass = destType.shared.effectiveMetaclass;
+                if (constraints) {
+                    setConstraintsForFreeTypeVars(destType, UnknownType.create(), constraints);
+                }
+                return true;
+            }
 
-                if (destMetaclass && isInstantiableClass(destMetaclass)) {
+            if (isUnion(destType)) {
+                // If both the source and dest are unions, use assignFromUnionType which has
+                // special-case logic to handle this case.
+                if (isUnion(srcType)) {
+                    return assignFromUnionType(destType, srcType, diag, constraints, flags, recursionCount);
+                }
+
+                const clonedConstraints = constraints?.clone();
+                if (
+                    assignToUnionType(destType, srcType, /* diag */ undefined, clonedConstraints, flags, recursionCount)
+                ) {
+                    if (constraints && clonedConstraints) {
+                        constraints.copyFromClone(clonedConstraints);
+                    }
+                    return true;
+                }
+            }
+
+            // Not sure why we need to makeTopLevelTypeVarsConcrete?
+            // - This loses opportunity to replace one type var by another (e.g. instead of A = B this makes A = object)
+            //   which is less preferred from a user perspective and loses opportunity of transitive type var resolution
+            //   (e.g. later on when B is resolved then we can resolve A)
+            // - makeTopLevelTypeVarsConcrete maybe reduces chances of recursion (e.g. A is bound to a type that uses B
+            //   and B is bound to a type that uses A, this can lead to recursive nested resolutions A[B[A[B[...]]]])
+            // - In case of contravariant assignment, we need to keep src type vars
+            const expandedSrcType = makeTopLevelTypeVarsConcrete(srcType);
+            // if (isUnion(expandedSrcType)) {
+            //     return assignFromUnionType(destType, expandedSrcType, diag, constraints, flags, recursionCount);
+            // }
+            if (isUnion(srcType)) {
+                return assignFromUnionType(destType, srcType, diag, constraints, flags, recursionCount);
+            }
+
+            if (isUnion(destType)) {
+                return assignToUnionType(destType, srcType, diag, constraints, flags, recursionCount);
+            }
+
+            // Is the src a specialized "type" object?
+            if (isClassInstance(expandedSrcType) && ClassType.isBuiltIn(expandedSrcType, 'type')) {
+                const srcTypeArgs = expandedSrcType.priv.typeArgs;
+                let typeTypeArg: Type;
+
+                if (srcTypeArgs && srcTypeArgs.length >= 1) {
+                    typeTypeArg = srcTypeArgs[0];
+                } else {
+                    typeTypeArg = UnknownType.create();
+                }
+
+                if (isAnyOrUnknown(typeTypeArg)) {
+                    if (isEffectivelyInstantiable(destType)) {
+                        return true;
+                    }
+                } else if (isClassInstance(typeTypeArg) || isTypeVar(typeTypeArg)) {
                     if (
+                        assignType(
+                            destType,
+                            convertToInstantiable(typeTypeArg),
+                            diag?.createAddendum(),
+                            constraints,
+                            flags,
+                            recursionCount
+                        )
+                    ) {
+                        return true;
+                    }
+
+                    diag?.addMessage(LocAddendum.typeAssignmentMismatch().format(printSrcDestTypes(srcType, destType)));
+                    return false;
+                }
+            }
+
+            if (isInstantiableClass(destType)) {
+                if (isInstantiableClass(expandedSrcType)) {
+                    // PEP 544 says that if the dest type is a type[Proto] class,
+                    // the source must be a "concrete" (non-protocol) class.
+                    if (ClassType.isProtocolClass(destType)) {
+                        if (
+                            (flags & AssignTypeFlags.AllowProtocolClassSource) === 0 &&
+                            ClassType.isProtocolClass(expandedSrcType) &&
+                            isInstantiableClass(srcType) &&
+                            !srcType.priv.includeSubclasses
+                        ) {
+                            diag?.addMessage(
+                                LocAddendum.protocolSourceIsNotConcrete().format({
+                                    sourceType: printType(convertToInstance(srcType)),
+                                    destType: printType(destType),
+                                })
+                            );
+                            return false;
+                        }
+                    }
+
+                    if (ClassType.isBuiltIn(destType, 'type') && (srcType.props?.instantiableDepth ?? 0) > 0) {
+                        return true;
+                    }
+
+                    if (isSpecialFormClass(expandedSrcType, flags)) {
+                        // Special form classes are compatible only with other special form
+                        // classes, not with 'object' or 'type'.
+                        const destSpecialForm = destType.props?.specialForm ?? destType;
+                        if (isSpecialFormClass(destSpecialForm, flags)) {
+                            return assignType(
+                                destSpecialForm,
+                                expandedSrcType,
+                                diag,
+                                constraints,
+                                flags,
+                                recursionCount
+                            );
+                        }
+                    } else if (
                         assignClass(
-                            destMetaclass,
-                            ClassType.cloneAsInstantiable(expandedSrcType),
+                            destType,
+                            expandedSrcType,
                             diag,
                             constraints,
                             flags,
@@ -25274,411 +25279,464 @@ export function createTypeEvaluator(
 
                     diag?.addMessage(LocAddendum.typeAssignmentMismatch().format(printSrcDestTypes(srcType, destType)));
                     return false;
+                } else if (isClassInstance(expandedSrcType) && isMetaclassInstance(expandedSrcType)) {
+                    // If the source is a metaclass instance, verify that it's compatible with
+                    // the metaclass of the instantiable dest type.
+                    const destMetaclass = destType.shared.effectiveMetaclass;
+
+                    if (destMetaclass && isInstantiableClass(destMetaclass)) {
+                        if (
+                            assignClass(
+                                destMetaclass,
+                                ClassType.cloneAsInstantiable(expandedSrcType),
+                                diag,
+                                constraints,
+                                flags,
+                                recursionCount,
+                                /* reportErrorsUsingObjType */ false
+                            )
+                        ) {
+                            return true;
+                        }
+
+                        diag?.addMessage(
+                            LocAddendum.typeAssignmentMismatch().format(printSrcDestTypes(srcType, destType))
+                        );
+                        return false;
+                    }
                 }
             }
-        }
 
-        if (isClassInstance(destType)) {
-            if (ClassType.isBuiltIn(destType, 'type')) {
+            if (isClassInstance(destType)) {
+                if (ClassType.isBuiltIn(destType, 'type')) {
+                    if (
+                        isInstantiableClass(srcType) &&
+                        isSpecialFormClass(srcType, flags) &&
+                        TypeBase.getInstantiableDepth(srcType) === 0
+                    ) {
+                        return false;
+                    }
+
+                    if (isAnyOrUnknown(srcType) && (flags & AssignTypeFlags.OverloadOverlap) !== 0) {
+                        return false;
+                    }
+
+                    const destTypeArgs = destType.priv.typeArgs;
+                    if (destTypeArgs && destTypeArgs.length >= 1) {
+                        if (TypeBase.isInstance(destTypeArgs[0]) && TypeBase.isInstantiable(srcType)) {
+                            return assignType(
+                                destTypeArgs[0],
+                                convertToInstance(srcType),
+                                diag,
+                                constraints,
+                                flags,
+                                recursionCount
+                            );
+                        }
+                    }
+
+                    // Is the dest a "type" object? Assume that all instantiable
+                    // types are assignable to "type".
+                    if (TypeBase.isInstantiable(srcType)) {
+                        const isLiteral = isClass(srcType) && srcType.priv.literalValue !== undefined;
+                        return !isLiteral;
+                    }
+                }
+
+                let concreteSrcType = makeTopLevelTypeVarsConcrete(srcType);
                 if (
-                    isInstantiableClass(srcType) &&
-                    isSpecialFormClass(srcType, flags) &&
-                    TypeBase.getInstantiableDepth(srcType) === 0
+                    isClass(concreteSrcType) &&
+                    TypeBase.isInstance(concreteSrcType) &&
+                    !ClassType.isCallable(destType) &&
+                    !ClassType.isCallable(concreteSrcType)
                 ) {
-                    return false;
-                }
-
-                if (isAnyOrUnknown(srcType) && (flags & AssignTypeFlags.OverloadOverlap) !== 0) {
-                    return false;
-                }
-
-                const destTypeArgs = destType.priv.typeArgs;
-                if (destTypeArgs && destTypeArgs.length >= 1) {
-                    if (TypeBase.isInstance(destTypeArgs[0]) && TypeBase.isInstantiable(srcType)) {
+                    // Handle the case where the source is an unpacked tuple.
+                    if (
+                        !destType.priv.isUnpacked &&
+                        concreteSrcType.priv.isUnpacked &&
+                        concreteSrcType.priv.tupleTypeArgs
+                    ) {
                         return assignType(
-                            destTypeArgs[0],
-                            convertToInstance(srcType),
+                            destType,
+                            combineTupleTypeArgs(concreteSrcType.priv.tupleTypeArgs),
                             diag,
                             constraints,
                             flags,
                             recursionCount
                         );
                     }
-                }
 
-                // Is the dest a "type" object? Assume that all instantiable
-                // types are assignable to "type".
-                if (TypeBase.isInstantiable(srcType)) {
-                    const isLiteral = isClass(srcType) && srcType.priv.literalValue !== undefined;
-                    return !isLiteral;
-                }
-            }
-
-            let concreteSrcType = makeTopLevelTypeVarsConcrete(srcType);
-            if (
-                isClass(concreteSrcType) &&
-                TypeBase.isInstance(concreteSrcType) &&
-                !ClassType.isCallable(destType) &&
-                !ClassType.isCallable(concreteSrcType)
-            ) {
-                // Handle the case where the source is an unpacked tuple.
-                if (
-                    !destType.priv.isUnpacked &&
-                    concreteSrcType.priv.isUnpacked &&
-                    concreteSrcType.priv.tupleTypeArgs
-                ) {
-                    return assignType(
-                        destType,
-                        combineTupleTypeArgs(concreteSrcType.priv.tupleTypeArgs),
-                        diag,
-                        constraints,
-                        flags,
-                        recursionCount
-                    );
-                }
-
-                // Handle enum literals that are assignable to another (non-Enum) literal.
-                // This can happen for IntEnum and StrEnum members.
-                if (
-                    ClassType.isEnumClass(concreteSrcType) &&
-                    concreteSrcType.priv.literalValue instanceof EnumLiteral &&
-                    concreteSrcType.shared.mro.some(
-                        (base) => isClass(base) && ClassType.isBuiltIn(base, ['int', 'str', 'bytes'])
-                    ) &&
-                    isClassInstance(concreteSrcType.priv.literalValue.itemType) &&
-                    isLiteralType(concreteSrcType.priv.literalValue.itemType) &&
-                    assignType(destType, concreteSrcType.priv.literalValue.itemType)
-                ) {
-                    return true;
-                }
-
-                if (
-                    destType.priv.literalValue !== undefined &&
-                    ClassType.isSameGenericClass(destType, concreteSrcType)
-                ) {
-                    const srcLiteral = concreteSrcType.priv.literalValue;
-                    if (srcLiteral === undefined || !ClassType.isLiteralValueSame(concreteSrcType, destType)) {
-                        diag?.addMessage(
-                            LocAddendum.literalAssignmentMismatch().format({
-                                sourceType: printType(srcType),
-                                destType: printType(destType),
-                            })
-                        );
-
-                        return false;
-                    }
-                }
-
-                // Handle LiteralString special form.
-                if (ClassType.isBuiltIn(destType, 'LiteralString')) {
+                    // Handle enum literals that are assignable to another (non-Enum) literal.
+                    // This can happen for IntEnum and StrEnum members.
                     if (
-                        ClassType.isBuiltIn(concreteSrcType, 'str') &&
-                        concreteSrcType.priv.literalValue !== undefined
+                        ClassType.isEnumClass(concreteSrcType) &&
+                        concreteSrcType.priv.literalValue instanceof EnumLiteral &&
+                        concreteSrcType.shared.mro.some(
+                            (base) => isClass(base) && ClassType.isBuiltIn(base, ['int', 'str', 'bytes'])
+                        ) &&
+                        isClassInstance(concreteSrcType.priv.literalValue.itemType) &&
+                        isLiteralType(concreteSrcType.priv.literalValue.itemType) &&
+                        assignType(destType, concreteSrcType.priv.literalValue.itemType)
                     ) {
-                        return (flags & AssignTypeFlags.Invariant) === 0;
-                    } else if (ClassType.isBuiltIn(concreteSrcType, 'LiteralString')) {
                         return true;
                     }
-                } else if (
-                    ClassType.isBuiltIn(concreteSrcType, 'LiteralString') &&
-                    strClass &&
-                    isInstantiableClass(strClass) &&
-                    (flags & AssignTypeFlags.Invariant) === 0
-                ) {
-                    concreteSrcType = ClassType.cloneAsInstance(strClass);
-                }
 
-                if (
-                    !assignClass(
-                        ClassType.cloneAsInstantiable(destType),
-                        ClassType.cloneAsInstantiable(concreteSrcType),
-                        diag,
-                        constraints,
-                        flags,
-                        recursionCount,
-                        /* reportErrorsUsingObjType */ true
-                    )
-                ) {
-                    return false;
-                }
+                    if (
+                        destType.priv.literalValue !== undefined &&
+                        ClassType.isSameGenericClass(destType, concreteSrcType)
+                    ) {
+                        const srcLiteral = concreteSrcType.priv.literalValue;
+                        if (srcLiteral === undefined || !ClassType.isLiteralValueSame(concreteSrcType, destType)) {
+                            diag?.addMessage(
+                                LocAddendum.literalAssignmentMismatch().format({
+                                    sourceType: printType(srcType),
+                                    destType: printType(destType),
+                                })
+                            );
 
-                return true;
-            } else if (
-                isFunction(concreteSrcType) ||
-                (isClass(concreteSrcType) && ClassType.isCallable(concreteSrcType)) ||
-                isOverloaded(concreteSrcType)
-            ) {
-                // Is the destination a callback protocol (defined in PEP 544)?
-                const destCallbackType = getCallbackProtocolType(destType, recursionCount);
-                if (destCallbackType) {
-                    return assignType(destCallbackType, concreteSrcType, diag, constraints, flags, recursionCount);
-                }
+                            return false;
+                        }
+                    }
 
-                const destFunctionType = ClassType.isCallable(destType)
-                    ? getFunctionTypeOfCallable(destType)
-                    : undefined;
-                if (destFunctionType) {
-                    return assignType(destFunctionType, concreteSrcType, diag, constraints, flags, recursionCount);
-                }
+                    // Handle LiteralString special form.
+                    if (ClassType.isBuiltIn(destType, 'LiteralString')) {
+                        if (
+                            ClassType.isBuiltIn(concreteSrcType, 'str') &&
+                            concreteSrcType.priv.literalValue !== undefined
+                        ) {
+                            return (flags & AssignTypeFlags.Invariant) === 0;
+                        } else if (ClassType.isBuiltIn(concreteSrcType, 'LiteralString')) {
+                            return true;
+                        }
+                    } else if (
+                        ClassType.isBuiltIn(concreteSrcType, 'LiteralString') &&
+                        strClass &&
+                        isInstantiableClass(strClass) &&
+                        (flags & AssignTypeFlags.Invariant) === 0
+                    ) {
+                        concreteSrcType = ClassType.cloneAsInstance(strClass);
+                    }
 
-                // All functions are considered instances of "builtins.function".
-                if (functionClass) {
-                    return assignType(
-                        destType,
-                        convertToInstance(functionClass),
-                        diag,
-                        constraints,
-                        flags,
-                        recursionCount
-                    );
-                }
-            } else if (isModule(concreteSrcType)) {
-                // Is the destination the built-in "ModuleType"?
-                if (ClassType.isBuiltIn(destType, 'ModuleType')) {
-                    return true;
-                }
-
-                if (ClassType.isProtocolClass(destType)) {
-                    return assignModuleToProtocol(
-                        evaluatorInterface,
-                        ClassType.cloneAsInstantiable(destType),
-                        concreteSrcType,
-                        diag,
-                        constraints,
-                        flags,
-                        recursionCount
-                    );
-                }
-            } else if (isInstantiableClass(concreteSrcType)) {
-                // See if the destType is an instantiation of a Protocol
-                // class that is effectively a function.
-                const callbackType = getCallbackProtocolType(destType, recursionCount);
-                if (callbackType) {
-                    return assignType(callbackType, concreteSrcType, diag, constraints, flags, recursionCount);
-                }
-
-                // If the destType is an instantiation of a Protocol,
-                // see if the class type itself satisfies the protocol.
-                if (ClassType.isProtocolClass(destType)) {
-                    return assignClassToProtocol(
-                        evaluatorInterface,
-                        ClassType.cloneAsInstantiable(destType),
-                        concreteSrcType,
-                        diag,
-                        constraints,
-                        flags,
-                        recursionCount
-                    );
-                }
-
-                // Determine if the metaclass can be assigned to the object.
-                const metaclass = concreteSrcType.shared.effectiveMetaclass;
-                if (metaclass) {
-                    if (isAnyOrUnknown(metaclass)) {
-                        return true;
-                    } else {
-                        return assignClass(
+                    if (
+                        !assignClass(
                             ClassType.cloneAsInstantiable(destType),
-                            metaclass,
+                            ClassType.cloneAsInstantiable(concreteSrcType),
                             diag,
                             constraints,
                             flags,
                             recursionCount,
-                            /* reportErrorsUsingObjType */ false
+                            /* reportErrorsUsingObjType */ true
+                        )
+                    ) {
+                        return false;
+                    }
+
+                    return true;
+                } else if (
+                    isFunction(concreteSrcType) ||
+                    (isClass(concreteSrcType) && ClassType.isCallable(concreteSrcType)) ||
+                    isOverloaded(concreteSrcType)
+                ) {
+                    // Is the destination a callback protocol (defined in PEP 544)?
+                    const destCallbackType = getCallbackProtocolType(destType, recursionCount);
+                    if (destCallbackType) {
+                        return assignType(destCallbackType, concreteSrcType, diag, constraints, flags, recursionCount);
+                    }
+
+                    const destFunctionType = ClassType.isCallable(destType)
+                        ? getFunctionTypeOfCallable(destType)
+                        : undefined;
+                    if (destFunctionType) {
+                        return assignType(destFunctionType, concreteSrcType, diag, constraints, flags, recursionCount);
+                    }
+
+                    // All functions are considered instances of "builtins.function".
+                    if (functionClass) {
+                        return assignType(
+                            destType,
+                            convertToInstance(functionClass),
+                            diag,
+                            constraints,
+                            flags,
+                            recursionCount
                         );
                     }
-                }
-            } else if (isAnyOrUnknown(concreteSrcType) && !concreteSrcType.props?.specialForm) {
-                return (flags & AssignTypeFlags.OverloadOverlap) === 0;
-            } else if (isUnion(concreteSrcType)) {
-                return assignType(destType, concreteSrcType, diag, constraints, flags, recursionCount);
-            }
-        }
-
-        if (isFunction(destType)) {
-            let concreteSrcType = makeTopLevelTypeVarsConcrete(srcType);
-
-            if (isClassInstance(concreteSrcType) && !MyPyrightExtensions.isSubscriptable(concreteSrcType)) {
-                const boundMethod = getBoundMagicMethod(
-                    concreteSrcType,
-                    '__call__',
-                    /* selfType */ undefined,
-                    /* diag */ undefined,
-                    recursionCount
-                );
-                if (boundMethod) {
-                    concreteSrcType = boundMethod;
-                }
-            }
-
-            // If it's a class, use the constructor for type compatibility checking.
-            if (isInstantiableClass(concreteSrcType) && concreteSrcType.priv.literalValue === undefined) {
-                const constructor = createFunctionFromConstructor(
-                    evaluatorInterface,
-                    concreteSrcType,
-                    isTypeVar(srcType) ? convertToInstance(srcType) : undefined,
-                    recursionCount
-                );
-                if (constructor) {
-                    concreteSrcType = constructor;
-
-                    // The constructor conversion may result in a union of the
-                    // __init__ and __new__ callables.
-                    if (isUnion(concreteSrcType)) {
-                        return assignType(destType, concreteSrcType, diag, constraints, flags, recursionCount);
+                } else if (isModule(concreteSrcType)) {
+                    // Is the destination the built-in "ModuleType"?
+                    if (ClassType.isBuiltIn(destType, 'ModuleType')) {
+                        return true;
                     }
-                }
-            }
 
-            if (isAnyOrUnknown(concreteSrcType)) {
-                return (flags & AssignTypeFlags.OverloadOverlap) === 0;
-            }
-
-            if (isOverloaded(concreteSrcType)) {
-                // If this is the first pass of an argument assignment, skip
-                // all attempts to assign an overloaded function to a function
-                // because we probably don't have enough information to properly
-                // filter the overloads at this time. We will do this work on
-                // subsequent passes.
-                if ((flags & AssignTypeFlags.ArgAssignmentFirstPass) !== 0) {
-                    return true;
-                }
-
-                // Find all of the overloaded functions that match the parameters.
-                const overloads = OverloadedType.getOverloads(concreteSrcType);
-                const filteredOverloads: CallableType[] = [];
-                const typeVarSignatures: ConstraintSet[] = [];
-
-                overloads.forEach((overload) => {
-                    const overloadScopeId = getTypeVarScopeId(overload) ?? '';
-                    const constraintsClone = constraints?.cloneWithSignature(overloadScopeId);
-
-                    if (assignType(destType, overload, /* diag */ undefined, constraintsClone, flags, recursionCount)) {
-                        filteredOverloads.push(overload);
-
-                        if (constraintsClone) {
-                            appendArray(typeVarSignatures, constraintsClone.getConstraintSets());
-                        }
+                    if (ClassType.isProtocolClass(destType)) {
+                        return assignModuleToProtocol(
+                            evaluatorInterface,
+                            ClassType.cloneAsInstantiable(destType),
+                            concreteSrcType,
+                            diag,
+                            constraints,
+                            flags,
+                            recursionCount
+                        );
                     }
-                });
-
-                if (filteredOverloads.length === 0) {
-                    diag?.addMessage(LocAddendum.noOverloadAssignable().format({ type: printType(destType) }));
-                    return false;
-                }
-
-                if (filteredOverloads.length === 1 || (flags & AssignTypeFlags.ArgAssignmentFirstPass) === 0) {
-                    if (constraints) {
-                        constraints.addConstraintSets(typeVarSignatures);
+                } else if (isInstantiableClass(concreteSrcType)) {
+                    // See if the destType is an instantiation of a Protocol
+                    // class that is effectively a function.
+                    const callbackType = getCallbackProtocolType(destType, recursionCount);
+                    if (callbackType) {
+                        return assignType(callbackType, concreteSrcType, diag, constraints, flags, recursionCount);
                     }
-                }
 
-                return true;
-            }
+                    // If the destType is an instantiation of a Protocol,
+                    // see if the class type itself satisfies the protocol.
+                    if (ClassType.isProtocolClass(destType)) {
+                        return assignClassToProtocol(
+                            evaluatorInterface,
+                            ClassType.cloneAsInstantiable(destType),
+                            concreteSrcType,
+                            diag,
+                            constraints,
+                            flags,
+                            recursionCount
+                        );
+                    }
 
-            if (isFunction(concreteSrcType) || (isClass(concreteSrcType) && ClassType.isCallable(concreteSrcType))) {
-                const concreteSrcTypeFunction = getFunctionTypeOfCallable(concreteSrcType);
-                if (
-                    concreteSrcTypeFunction &&
-                    assignFunction(
-                        destType,
-                        concreteSrcTypeFunction,
-                        diag?.createAddendum(),
-                        constraints ?? new ConstraintTracker(evaluatorInterface),
-                        flags,
-                        recursionCount
-                    )
-                ) {
-                    return true;
-                }
-            }
-        }
-
-        if (isOverloaded(destType)) {
-            const overloadDiag = diag?.createAddendum();
-
-            // All overloads in the dest must be assignable.
-            const destOverloads = OverloadedType.getOverloads(destType);
-
-            // If the source is also an overload with the same number of overloads,
-            // there's a good chance that there's a one-to-one mapping. Try this
-            // first before using an n^2 algorithm.
-            if (isOverloaded(srcType)) {
-                const srcOverloads = OverloadedType.getOverloads(srcType);
-                if (destOverloads.length === srcOverloads.length) {
-                    if (
-                        destOverloads.every((destOverload, index) => {
-                            const srcOverload = srcOverloads[index];
-                            return assignType(
-                                destOverload,
-                                srcOverload,
-                                /* diag */ undefined,
+                    // Determine if the metaclass can be assigned to the object.
+                    const metaclass = concreteSrcType.shared.effectiveMetaclass;
+                    if (metaclass) {
+                        if (isAnyOrUnknown(metaclass)) {
+                            return true;
+                        } else {
+                            return assignClass(
+                                ClassType.cloneAsInstantiable(destType),
+                                metaclass,
+                                diag,
                                 constraints,
                                 flags,
-                                recursionCount
+                                recursionCount,
+                                /* reportErrorsUsingObjType */ false
                             );
-                        })
+                        }
+                    }
+                } else if (isAnyOrUnknown(concreteSrcType) && !concreteSrcType.props?.specialForm) {
+                    return (flags & AssignTypeFlags.OverloadOverlap) === 0;
+                } else if (isUnion(concreteSrcType)) {
+                    return assignType(destType, concreteSrcType, diag, constraints, flags, recursionCount);
+                }
+            }
+
+            if (isFunction(destType)) {
+                let concreteSrcType = makeTopLevelTypeVarsConcrete(srcType);
+
+                if (isClassInstance(concreteSrcType) && !MyPyrightExtensions.isSubscriptable(concreteSrcType)) {
+                    const boundMethod = getBoundMagicMethod(
+                        concreteSrcType,
+                        '__call__',
+                        /* selfType */ undefined,
+                        /* diag */ undefined,
+                        recursionCount
+                    );
+                    if (boundMethod) {
+                        concreteSrcType = boundMethod;
+                    }
+                }
+
+                // If it's a class, use the constructor for type compatibility checking.
+                if (isInstantiableClass(concreteSrcType) && concreteSrcType.priv.literalValue === undefined) {
+                    const constructor = createFunctionFromConstructor(
+                        evaluatorInterface,
+                        concreteSrcType,
+                        isTypeVar(srcType) ? convertToInstance(srcType) : undefined,
+                        recursionCount
+                    );
+                    if (constructor) {
+                        concreteSrcType = constructor;
+
+                        // The constructor conversion may result in a union of the
+                        // __init__ and __new__ callables.
+                        if (isUnion(concreteSrcType)) {
+                            return assignType(destType, concreteSrcType, diag, constraints, flags, recursionCount);
+                        }
+                    }
+                }
+
+                if (isAnyOrUnknown(concreteSrcType)) {
+                    return (flags & AssignTypeFlags.OverloadOverlap) === 0;
+                }
+
+                if (isOverloaded(concreteSrcType)) {
+                    // If this is the first pass of an argument assignment, skip
+                    // all attempts to assign an overloaded function to a function
+                    // because we probably don't have enough information to properly
+                    // filter the overloads at this time. We will do this work on
+                    // subsequent passes.
+                    if ((flags & AssignTypeFlags.ArgAssignmentFirstPass) !== 0) {
+                        return true;
+                    }
+
+                    // Find all of the overloaded functions that match the parameters.
+                    const overloads = OverloadedType.getOverloads(concreteSrcType);
+                    const filteredOverloads: CallableType[] = [];
+                    const typeVarSignatures: ConstraintSet[] = [];
+
+                    overloads.forEach((overload) => {
+                        const overloadScopeId = getTypeVarScopeId(overload) ?? '';
+                        const constraintsClone = constraints?.cloneWithSignature(overloadScopeId);
+
+                        if (
+                            assignType(
+                                destType,
+                                overload,
+                                /* diag */ undefined,
+                                constraintsClone,
+                                flags,
+                                recursionCount
+                            )
+                        ) {
+                            filteredOverloads.push(overload);
+
+                            if (constraintsClone) {
+                                appendArray(typeVarSignatures, constraintsClone.getConstraintSets());
+                            }
+                        }
+                    });
+
+                    if (filteredOverloads.length === 0) {
+                        diag?.addMessage(LocAddendum.noOverloadAssignable().format({ type: printType(destType) }));
+                        return false;
+                    }
+
+                    if (filteredOverloads.length === 1 || (flags & AssignTypeFlags.ArgAssignmentFirstPass) === 0) {
+                        if (constraints) {
+                            constraints.addConstraintSets(typeVarSignatures);
+                        }
+                    }
+
+                    return true;
+                }
+
+                if (
+                    isFunction(concreteSrcType) ||
+                    (isClass(concreteSrcType) && ClassType.isCallable(concreteSrcType))
+                ) {
+                    const concreteSrcTypeFunction = getFunctionTypeOfCallable(concreteSrcType);
+                    if (
+                        concreteSrcTypeFunction &&
+                        assignFunction(
+                            destType,
+                            concreteSrcTypeFunction,
+                            diag?.createAddendum(),
+                            constraints ?? new ConstraintTracker(evaluatorInterface),
+                            flags,
+                            recursionCount
+                        )
                     ) {
                         return true;
                     }
                 }
             }
 
-            const isAssignable = destOverloads.every((destOverload) => {
-                const result = assignType(
-                    destOverload,
-                    srcType,
-                    overloadDiag?.createAddendum(),
-                    constraints,
-                    flags,
-                    recursionCount
-                );
-                return result;
-            });
+            if (isOverloaded(destType)) {
+                const overloadDiag = diag?.createAddendum();
 
-            if (!isAssignable) {
-                const overloads = OverloadedType.getOverloads(destType);
+                // All overloads in the dest must be assignable.
+                const destOverloads = OverloadedType.getOverloads(destType);
 
-                if (overloadDiag && overloads.length > 0) {
-                    overloadDiag.addMessage(
-                        LocAddendum.overloadNotAssignable().format({
-                            name: overloads[0].shared.name,
-                        })
+                // If the source is also an overload with the same number of overloads,
+                // there's a good chance that there's a one-to-one mapping. Try this
+                // first before using an n^2 algorithm.
+                if (isOverloaded(srcType)) {
+                    const srcOverloads = OverloadedType.getOverloads(srcType);
+                    if (destOverloads.length === srcOverloads.length) {
+                        if (
+                            destOverloads.every((destOverload, index) => {
+                                const srcOverload = srcOverloads[index];
+                                return assignType(
+                                    destOverload,
+                                    srcOverload,
+                                    /* diag */ undefined,
+                                    constraints,
+                                    flags,
+                                    recursionCount
+                                );
+                            })
+                        ) {
+                            return true;
+                        }
+                    }
+                }
+
+                const isAssignable = destOverloads.every((destOverload) => {
+                    const result = assignType(
+                        destOverload,
+                        srcType,
+                        overloadDiag?.createAddendum(),
+                        constraints,
+                        flags,
+                        recursionCount
+                    );
+                    return result;
+                });
+
+                if (!isAssignable) {
+                    const overloads = OverloadedType.getOverloads(destType);
+
+                    if (overloadDiag && overloads.length > 0) {
+                        overloadDiag.addMessage(
+                            LocAddendum.overloadNotAssignable().format({
+                                name: overloads[0].shared.name,
+                            })
+                        );
+                    }
+                    return false;
+                }
+
+                return true;
+            }
+
+            if (isAssigningToObject(destType, srcType)) {
+                return true;
+            }
+
+            // Are we trying to assign None to a protocol?
+            if (isNoneInstance(srcType) && isClassInstance(destType) && ClassType.isProtocolClass(destType)) {
+                if (noneTypeClass && isInstantiableClass(noneTypeClass)) {
+                    return assignClassToProtocol(
+                        evaluatorInterface,
+                        ClassType.cloneAsInstantiable(destType),
+                        ClassType.cloneAsInstance(noneTypeClass),
+                        diag,
+                        constraints,
+                        flags,
+                        recursionCount
                     );
                 }
+            }
+
+            if (isNoneInstance(destType)) {
+                diag?.addMessage(LocAddendum.assignToNone());
                 return false;
             }
 
-            return true;
-        }
+            diag?.addMessage(LocAddendum.typeAssignmentMismatch().format(printSrcDestTypes(srcType, destType)));
 
-        if (isAssigningToObject(destType, srcType)) {
-            return true;
-        }
-
-        // Are we trying to assign None to a protocol?
-        if (isNoneInstance(srcType) && isClassInstance(destType) && ClassType.isProtocolClass(destType)) {
-            if (noneTypeClass && isInstantiableClass(noneTypeClass)) {
-                return assignClassToProtocol(
-                    evaluatorInterface,
-                    ClassType.cloneAsInstantiable(destType),
-                    ClassType.cloneAsInstance(noneTypeClass),
-                    diag,
-                    constraints,
-                    flags,
-                    recursionCount
-                );
-            }
-        }
-
-        if (isNoneInstance(destType)) {
-            diag?.addMessage(LocAddendum.assignToNone());
             return false;
         }
 
-        diag?.addMessage(LocAddendum.typeAssignmentMismatch().format(printSrcDestTypes(srcType, destType)));
+        const isAssignable = assignTypeInternal();
 
-        return false;
+        if (isAssignable && (destType.props?.annotatedTypeArgs || srcType.props?.annotatedTypeArgs)) {
+            return MyPyrightExtensions.assignRefinedType(
+                evaluatorInterface,
+                destType,
+                srcType,
+                diag,
+                constraints,
+                flags,
+                recursionCount
+            );
+        }
+
+        return isAssignable;
     }
 
     // Determines whether a recursive type alias can be assigned to itself
