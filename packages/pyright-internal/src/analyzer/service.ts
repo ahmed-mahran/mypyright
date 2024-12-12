@@ -8,9 +8,9 @@
  * Python files.
  */
 
-import * as TOML from 'js-toml';
 import * as JSONC from 'jsonc-parser';
 import { AbstractCancellationTokenSource, CancellationToken } from 'vscode-languageserver';
+import { parse } from '../common/tomlUtils';
 
 import { BackgroundAnalysisBase, RefreshOptions } from '../backgroundAnalysisBase';
 import { CancellationProvider, DefaultCancellationProvider } from '../common/cancellationUtils';
@@ -28,7 +28,7 @@ import { EditableProgram, ProgramView } from '../common/extensibility';
 import { FileSystem } from '../common/fileSystem';
 import { FileWatcher, FileWatcherEventType, ignoredWatchEventFunction } from '../common/fileWatcher';
 import { Host, HostFactory, NoAccessHost } from '../common/host';
-import { defaultStubsDirectory } from '../common/pathConsts';
+import { configFileName, defaultStubsDirectory } from '../common/pathConsts';
 import { getFileName, isRootedDiskPath, normalizeSlashes } from '../common/pathUtils';
 import { PythonVersion } from '../common/pythonVersion';
 import { ServiceKeys } from '../common/serviceKeys';
@@ -60,7 +60,6 @@ import { ImportResolver, ImportResolverFactory, createImportedModuleDescriptor }
 import { MaxAnalysisTime, Program } from './program';
 import { findPythonSearchPaths } from './pythonPathUtils';
 import {
-    configFileName,
     findConfigFile,
     findConfigFileHereOrUp,
     findPyprojectTomlFile,
@@ -1146,7 +1145,7 @@ export class AnalyzerService {
     private _parsePyprojectTomlFile(pyprojectPath: Uri): object | undefined {
         return this._attemptParseFile(pyprojectPath, (fileContents, attemptCount) => {
             try {
-                const configObj = TOML.load(fileContents);
+                const configObj = parse(fileContents);
                 if (configObj && 'tool' in configObj) {
                     return (configObj.tool as Record<string, object>).mypyright as object;
                 }

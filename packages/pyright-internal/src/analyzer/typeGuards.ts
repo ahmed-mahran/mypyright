@@ -2064,7 +2064,7 @@ export function getElementTypeForContainerNarrowing(containerType: Type) {
 export function narrowTypeForContainerElementType(evaluator: TypeEvaluator, referenceType: Type, elementType: Type) {
     return evaluator.mapSubtypesExpandTypeVars(referenceType, /* options */ undefined, (referenceSubtype) => {
         return mapSubtypes(elementType, (elementSubtype) => {
-            if (isAnyOrUnknown(referenceSubtype)) {
+            if (isAnyOrUnknown(elementSubtype)) {
                 return referenceSubtype;
             }
 
@@ -2336,7 +2336,7 @@ function narrowTypeForTypeIs(evaluator: TypeEvaluator, type: Type, classType: Cl
                 if (isPositiveTest) {
                     if (matches) {
                         if (ClassType.isSameGenericClass(ClassType.cloneAsInstantiable(subtype), classType)) {
-                            return addConditionToType(subtype, classType.props?.condition);
+                            return addConditionToType(subtype, getTypeCondition(classType));
                         }
 
                         return addConditionToType(ClassType.cloneAsInstance(classType), subtype.props?.condition);
@@ -2358,7 +2358,9 @@ function narrowTypeForTypeIs(evaluator: TypeEvaluator, type: Type, classType: Cl
                     return subtype;
                 }
             } else if (isAnyOrUnknown(subtype)) {
-                return isPositiveTest ? ClassType.cloneAsInstance(classType) : subtype;
+                return isPositiveTest
+                    ? ClassType.cloneAsInstance(addConditionToType(classType, getTypeCondition(subtype)))
+                    : subtype;
             }
 
             return unexpandedSubtype;
@@ -2390,7 +2392,7 @@ function narrowTypeForClassComparison(
             }
 
             if (isAnyOrUnknown(concreteSubtype)) {
-                return classType;
+                return addConditionToType(classType, getTypeCondition(concreteSubtype));
             }
 
             if (isClass(concreteSubtype)) {
@@ -2409,7 +2411,7 @@ function narrowTypeForClassComparison(
                     }
 
                     if (isSuperType) {
-                        return classType;
+                        return addConditionToType(classType, getTypeCondition(concreteSubtype));
                     }
 
                     const isSubType = ClassType.isDerivedFrom(classType, concreteSubtype);

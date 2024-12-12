@@ -225,6 +225,13 @@ export interface AddConditionOptions {
     skipBoundTypeVars?: boolean;
 }
 
+// There are cases where tuple types can be infinitely nested. The
+// recursion count limit will eventually be hit, but this will create
+// deep types that will effectively hang the analyzer. To prevent this,
+// we'll limit the depth of the tuple type arguments. This value is
+// large enough that we should never hit it in legitimate circumstances.
+const maxTupleTypeArgRecursionDepth = 10;
+
 // Tracks whether a function signature has been seen before within
 // an expression. For example, in the expression "foo(foo, foo)", the
 // signature for "foo" will be seen three times at three different
@@ -2049,7 +2056,7 @@ export function addTypeVarsToListIfUnique(list1: TypeVarType[], list2: TypeVarTy
             continue;
         }
 
-        if (!list1.find((type1) => isTypeSame(convertToInstance(type1), convertToInstance(type2)))) {
+        if (!list1.find((type1) => isTypeSame(type1, type2))) {
             list1.push(type2);
         }
     }
@@ -2150,18 +2157,15 @@ export function getTypeVarArgsRecursive(type: Type, recursionCount = 0): TypeVar
 // Creates a specialized version of the class, filling in any unspecified
 // type arguments with Unknown or default value.
 export function specializeWithDefaultTypeArgs(type: ClassType): ClassType {
-    if (type.shared.typeParams.length === 0 || type.priv.typeArgs) {
+    if (type.shared.typeParams.length === 0 || type.priv.typeArgs || !type.shared.typeVarScopeId) {
         return type;
     }
 
     const solution = new ConstraintSolution();
-    const typeParams = ClassType.getTypeParams(type);
 
-    typeParams.forEach((typeParam) => {
-        solution.setType(typeParam, applySolvedTypeVars(typeParam.shared.defaultType, solution));
-    });
-
-    return applySolvedTypeVars(type, solution) as ClassType;
+    return applySolvedTypeVars(type, solution, {
+        replaceUnsolved: { scopeIds: [type.shared.typeVarScopeId], tupleClassType: undefined },
+    }) as ClassType;
 }
 
 // Builds a mapping between type parameters and their specialized
@@ -3743,11 +3747,16 @@ export class TypeVarTransformer {
         let newTypeArgs: Type[] | undefined;
         let newTupleTypeArgs: TupleTypeArg[] | undefined;
         let specializationNeeded = false;
+        let isTypeArgExplicit = true;
 
         // If type args were previously provided, specialize them.
 
         // Handle tuples specially.
         if (ClassType.isTupleClass(classType)) {
+            if (getContainerDepth(classType) > maxTupleTypeArgRecursionDepth) {
+                return classType;
+            }
+
             if (classType.priv.tupleTypeArgs) {
                 newTupleTypeArgs = [];
 
@@ -3793,6 +3802,7 @@ export class TypeVarTransformer {
                     const newTypeArgType = this.apply(typeParams[0], recursionCount);
                     newTupleTypeArgs = [{ type: newTypeArgType, isUnbounded: true }];
                     specializationNeeded = true;
+                    isTypeArgExplicit = false;
                 }
             }
 
@@ -3805,6 +3815,11 @@ export class TypeVarTransformer {
 
         if (!newTypeArgs) {
             const typeArgs = classType.priv.typeArgs ?? typeParams;
+
+            if (!classType.priv.typeArgs) {
+                isTypeArgExplicit = false;
+            }
+
             newTypeArgs = typeArgs.map((oldTypeArgType) => {
                 let newTypeArgType = this.apply(oldTypeArgType, recursionCount);
                 if (newTypeArgType !== oldTypeArgType) {
@@ -3828,7 +3843,7 @@ export class TypeVarTransformer {
         return ClassType.specialize(
             classType,
             newTypeArgs,
-            /* isTypeArgExplicit */ true,
+            isTypeArgExplicit,
             /* includeSubclasses */ undefined,
             newTupleTypeArgs
         );

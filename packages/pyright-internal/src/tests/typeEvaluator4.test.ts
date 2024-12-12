@@ -51,6 +51,11 @@ test('Final6', () => {
     TestUtils.validateResults(analysisResults, 2);
 });
 
+test('Final8', () => {
+    const analysisResults = TestUtils.typeAnalyzeSampleFiles(['final8.py']);
+    TestUtils.validateResults(analysisResults, 4);
+});
+
 test('InferredTypes1', () => {
     const analysisResults = TestUtils.typeAnalyzeSampleFiles(['inferredTypes1.py']);
     TestUtils.validateResults(analysisResults, 0);
@@ -371,6 +376,12 @@ test('DataClass17', () => {
     TestUtils.validateResults(analysisResults, 6);
 });
 
+test('DataClass18', () => {
+    const analysisResults = TestUtils.typeAnalyzeSampleFiles(['dataclass18.py']);
+
+    TestUtils.validateResults(analysisResults, 0);
+});
+
 test('DataClassReplace1', () => {
     const configOptions = new ConfigOptions(Uri.empty());
 
@@ -433,6 +444,12 @@ test('DataClassConverter2', () => {
     const analysisResults = TestUtils.typeAnalyzeSampleFiles(['dataclassConverter2.py']);
 
     TestUtils.validateResults(analysisResults, 4);
+});
+
+test('DataClassConverter3', () => {
+    const analysisResults = TestUtils.typeAnalyzeSampleFiles(['dataclassConverter3.py']);
+
+    TestUtils.validateResults(analysisResults, 0);
 });
 
 test('DataClassPostInit1', () => {
@@ -548,7 +565,7 @@ test('Unions3', () => {
 test('Unions4', () => {
     const analysisResults = TestUtils.typeAnalyzeSampleFiles(['unions4.py']);
 
-    TestUtils.validateResults(analysisResults, 3);
+    TestUtils.validateResults(analysisResults, 7);
 });
 
 test('Unions5', () => {
@@ -832,5 +849,10 @@ test('ParamSpec52', () => {
 
 test('ParamSpec53', () => {
     const results = TestUtils.typeAnalyzeSampleFiles(['paramSpec53.py']);
+    TestUtils.validateResults(results, 0);
+});
+
+test('Slice1', () => {
+    const results = TestUtils.typeAnalyzeSampleFiles(['slice1.py']);
     TestUtils.validateResults(results, 0);
 });

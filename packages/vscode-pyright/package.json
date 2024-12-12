@@ -1568,7 +1568,7 @@
     },
     "scripts": {
         "clean": "shx rm -rf ./dist ./out",
-        "prepackage": "node ./build/renamePackage.js mypyright && node ./build/setVersion.js 1.4.3 1.1.387",
+        "prepackage": "node ./build/renamePackage.js mypyright && node ./build/setVersion.js 1.4.3 1.1.390",
         "package": "vsce package",
         "postpackage": "node ./build/renamePackage.js vscode-mypyright",
         "vscode:prepublish": "node ./build/checkPackage.js && npm run clean && webpack --mode production --progress",
