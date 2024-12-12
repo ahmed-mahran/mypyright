@@ -18,6 +18,7 @@ ___
 - [Subscriptable Functions](#subscriptable-functions)
 - [Static Type Programming (Type Macros)](#static-type-programming-type-macros)
   - [Static Type Transformations (Type Maps)](#static-type-transformations-type-maps)
+  - [Static Type Predicates (Refinement Types)](#static-type-predicates-refinement-types)
 
 ___
 
@@ -696,7 +697,7 @@ Using a `TypeMap` implementation, e.g. `Add[float, T]`, as a type hint is analog
 |**Arguments**  | values and variables | types and type variables |
 |**Enclosing**  | parentheses          | square brackets          |
 
-### TBD
+### TBD {#type-map-tbd}
 
 The following are points for further considerations to be thoroughly investigated and looked for.
 
@@ -724,7 +725,7 @@ Overriding `__class_getitem__` is indeed a plausible option. [The purpose of `__
 
 Runtime type checkers could simply opt-in by executing the type map to compute the new type.
 
-#### Code Organization
+#### Code organization
 
 Type checker executes `map_type` which is a python code. This requires a convention for determining a python interpreter and a working directory. Consider the following file structure:
 
@@ -742,9 +743,239 @@ Security is a major concern when it comes to code execution. This is has to be h
 - Interpreter to provide a restricted mode for macros execution where a subset of the standard library is allowed. Alternatively, this could be done by the static type checker to analyze the code before calling the interpreter.
 - Enforce macros to deal only with symbols and literals e.g. [ast.literal_eval](https://docs.python.org/3/library/ast.html#ast.literal_eval).
 
-<!-- ### Static Type Predicates (Refinement Types) -->
+## Static Type Predicates (Refinement Types)
 
+Static type predicates allow further narrowing of a type to certain possible values limited by predicates. Those predicates are called refinements and the resulting type is called a refined type. The construct which associates predicates to a type is called a refinement type. A refined type is equivalent to a refinement type, one can think of a refined type as a result of evaluating a refinement type.
 
+All refinement predicates hold true for all possibe values of the refined type but not necessarily for all possible values of the original unrefined type. The refined type by definition is a subtype of the unrefined type, this means that the set of possible values of a refined type is a subset of the set of possible values of the unrefined type.
+
+So, a refinement type is a type equipped with predicates to further limit the set of possible values of that type. For example, the type `int` can be equipped with the (hypothetical) predicate `is_positive` to define a new subtype of `int` which accepts only positive integer values. Predicates can be composed in more complex forms to describe certain subset of values. For example, the predicates `is_even` and `< 100` can be conjoined with `is_positive` to limit `int` type to positive even values less than `100`.
+
+There are indefinitly many predicates. Predicates can differ per type, e.g. predicates for scalar integers are different from those of strings or matricies. Also, predicates can differ per domain even for the same type as domains deal with or introduce different concepts which could possibly require different origanization of values. For example, finacical applications could mandate different requirements for numbers than scientific applications, and strings in web applications have more specifics than in general applications (e.g. user email form validation). It is mandatory for the static type checker to be able to interpret every possible predicate without the need to implement every possible predicate in the static type checker itself.
+
+MyPyright introduces generic abstractions to make the development of actual predicates a separate concern from the static type checker. The following is a grammar (not necessarily following any standard form) describing those abstractions.
+
+```python
+RefinementType = Annotated[Type, Predicate+]
+
+Predicate = Predicate[Arg*] -> Result
+
+Arg = This | Predicate | Type | TypeVar | RefinementType
+TypeVarBound = Type | RefinementType
+
+Result = { RefinedType, Status }
+RefinedType = { Type | TypeVar, attributes: dict[str, Any] }
+Status = Ok | Error | Undecidable
+```
+
+### Refinement type construct
+
+MyPyright uses [`typing.Annotated`](https://docs.python.org/3/library/typing.html#typing.Annotated) to equip any python type `Type` with refinements to construct a refinement type. The refinement type can be used in places where `Annotated` can be used, that is in [type expressions](https://typing.readthedocs.io/en/latest/spec/annotations.html#type-and-annotation-expressions).
+
+### Predicates
+
+`Predicate`'s define refinement logic. A `Predicate` is a function with zero or more arguments that reduces to a `Result`. The `Result` is an object holding the final `RefinedType` and a `Status` indicating the truthfulness of the predicate.
+
+A `Predicate` can be thought of as, well!, a predicate returing a truthy value or as a map returning a transformed refined type.
+
+For example, `IsPositive[Arg]` is a predicate asking whether the `Arg` is positive or not. It returns a status indicating whether the argument is actually positive or not and it can modify the refined type to keep an attribute indicating the positivness of the refined type, hence it needs to return a refined type along with a status.
+
+On the other hand, `Length[Arg]` is a map that transforms the argument into its length attribute if any. So, it returns a refined type that corresponds to the length attribute of the argument and it also returns a status indicating whether or not the argument can be mapped to its length.
+
+MyPyright employes a functional descriptive approach for constructing refinement types such that `Predicate`'s can be composed in a nested applicative structure. `Predicate`'s are composed in a single type expression and arguments are passed as type arguments (between square brackets `[]`). For exmaple, consider this composition of predicates: `PredicateA0[PredicateB0[PredicateC0, PredicateC1], PredicateB1, PredicateB2]` which is equivalent to the following tree structure:
+
+```python
+                               ┌─────────────┐                  
+                               │ PredicateA0 │                  
+                               └──────┬──────┘                  
+                                      │                        
+                  ┌───────────────────┼───────────────────┐      
+                  │                   │                   │      
+           ┌──────┴──────┐     ┌──────┴──────┐     ┌──────┴──────┐
+           │ PredicateB0 │     │ PredicateB1 │     │ PredicateB2 │
+           └──────┬──────┘     └─────────────┘     └─────────────┘
+                  │                                          
+       ┌──────────┴──────────┐                                
+       │                     │                                
+┌──────┴──────┐       ┌──────┴──────┐                          
+│ PredicateC0 │       │ PredicateC1 │                          
+└─────────────┘       └─────────────┘                          
+```
+
+`Predicate`'s are evaluated in a depth-first post-order traversal and it is the resposibility of the parent predicate to combine the results from all children predicates.
+
+### Refined type
+
+A `RefinedType` is basically an object holding the AST of the original unrefined type along with a dictionary of attributes. `Predicate`'s use existing attributes to make decisions on the refinement `Status` and set new attributes as a result of the satisfiability of the `Predicate`'s.
+
+It is the sole resposibility of the user framework to determine the set of attributes sufficient to statically reason about types. For example, to reason about numeric types, one can employ [an intensional or an existential](https://en.wikipedia.org/wiki/Extensional_and_intensional_definitions) approach. For example, taking an intensional approach, one can set a `parity` attribute to indicate whether a number is even or odd. On the other hand, taking an existential approach, one can set an `interval` attribute and handle interval operations (e.g. intersection, union and difference) to reason about possible values when handling comparison relations. [SMT](https://en.wikipedia.org/wiki/Satisfiability_modulo_theories) solvers can be employed here as well such that `Predicate`'s can be translated into an SMT solver syntax and the refined type can hold the translated syntax as an attribute.
+
+### Status
+
+As mentioned, the status of a predicate indicates its truthfulness and a parent predicate should determine the combined truthfulness of its children. `Status` is a ternary (fuzzy) boolean type and values can be interpreted as follows:
+
+- `Ok`: the predicates are consistent and the refinement type is valid.
+- `Error`: the predicates are inconsistent and the refinement type is invalid.
+- `Undecidable`: The consistency of the predicates cannot be decided and the type may be valid or invalid.
+
+### Dependent type
+
+A Type variable can be used as argument to predicates. Also, a type variable can have a refinement type as its bound. This means that a refinement type can depend on types of other variables which is a form of [dependent type](https://en.wikipedia.org/wiki/Dependent_type).
+
+```python
+def create_short_list[T, N: Annotated[int, IsLessThan[This, Literal[100]]]](
+  n: N
+) -> Annotated[list[T], Equals[Length[This], N]]: ...
+```
+
+`create_short_list` returns a list of length that depends on possible values of parameter `n` which is type `N` which is an `int` restricted to values less than `100`. Any call to `create_short_list` with an argument of a type that the type checker cannot prove to statisfy predicates of `N` should be flagged as error (or a warning depending on the reason).
+
+```python
+def concat_list[A: list, B: list](
+  a: A, b: B
+) -> Annotated[list, Equals[Length[This], Plus[Length[A], Length[B]]]]: ...
+```
+
+### Refinement scope
+
+All predicates within an `Annotated` construct refine the same type i.e. have the same refinement scope. `This` is a special predicate that refers to the refined type of the current scope.
+
+Refinement types (or `Annotated` constructs) can be used as arguments to predicates hence refinement scopes can be nested. A refined type from the outer scope cannot be accessed by predicates from inner scope unless it is a type variable which can be referenced by name. `This` in the inner scope refers to the refined type of that scope.
+
+Nested refinement types are annoymous and cannot be referenced further in the outer scope unlike type variables.
+
+```python
+# A non-negative int is greater than all negative int's
+def a_non_negative_int(
+) -> Annotated[int, IsGreaterThan[This, Annotated[int, IsNegative[This]]]]: ...
+```
+
+### Implementation details
+
+Predicates are defined by extending from `TypeRefinementPredicate` and overriding the class methods `init_type` and `refine_type`.
+
+```python
+class MyPredicate[A, B](TypeRefinementPredicate[A, B]):
+  @classmethod
+  def init_type(cls, type_to_be_refined: RefinedType) -> RefinedType:
+    return type_to_be_refined
+  
+  @classmethod
+  def refine_type(
+    cls,
+    type_to_be_refined: RefinedType,
+    args: list[Refinement],
+    assume: bool,
+  ) -> TypeRefinementResult:
+    return TypeRefinementResult(type_to_be_refined, TypeRefinementStatus.Ok)
+```
+
+`init_type` is called on the first (topmost) predicate of `Annotated` arguments list to initialize the refined type that will be passed to all predicates down that scope. If `Annotated` has more than one top level predicate e.g. `Annotated[int, PredicateA0[...], PredicateA1[...], ...]`, `PredicateA0.init_type` will be called on the initial refined type, then after the refinements of `PredicateA0[...]` are applied, `PredicateA1.init_type` will be called on the resulting refined type which will be refined further by `PredicateA1[...]`.
+
+`refine_type` method should apply refinement logic given the initial refined type `type_to_be_refined` as initial conditions and processed arguments `args` which could be results of children predicates. `refine_type` can be called in two modes depending on the `assume` flag: the `assume` mode and `test` mode. In `assume` mode, predicates should be treated as assumptions that hold as true propositions for the refined type however predicates should be checked for consistency e.g. both `IsEven[This]` and `IsOdd[This]` are not consistent and cannot be assumed for the same refined type. While in `test` mode predicates should be accepted only if could proved to hold true and consistent.
+
+### Refinement type relations
+
+Refinement types extend the definition of the [assignable-to (or consistent subtyping)](https://typing.readthedocs.io/en/latest/spec/concepts.html#the-assignable-to-or-consistent-subtyping-relation) relation. For convenience, let `A' = { A; P }` indicate a refinement type `A'` of type `A` accompanied by predicate `P`.
+
+Given two refinement types `A' = { A; P }` and `B' = { B; Q }`, we need to define the assignable-to relation between `A'` and `B'`. If `P` and `Q` are both the simple `True` predicate i.e. `A' = { A; True }` and `B' = { B; True }`, then types `A'` and `B'` reduce to types `A` and `B` respectively. Then `B'` is assignable-to `A'` iff `B` is assignable-to `A`.
+
+In general, `B'` is assignable-to `A'` iff `B` is assignable-to `A` and `Q ^ P = Q` (given the type `B`). This means that `P` is redundant and doesn't narrow the scope of `B'` or equivalently `P` holds true for all members of `B'`.
+
+```scala
+B <: A => { B; P } <: { A; P }
+{ B; P ^ Q } <: { B; P }  <: { A; P }
+{ B; P ^ Q } <: { A; P }
+P ^ Q = Q => { B; P ^ Q } = { B; Q } => { B; Q } <: { A; P } => B' <: A'
+```
+
+If `A' = Annotated[float, IsGreater[This, Literal[0]]]` and `B' = Annotated[int, IsGreater[This, Literal[10]]]`, then `B'` is assignable-to `A'` as `int` is assignable-to `float` and all integers greater than `10` are also greater than `0`. However, if `A' = Annotated[float, IsGreater[This, Literal[100]]]`, then `B'` is not assignable-to `A'` as all integers greater than `10` are not necessarily greater than `100`.
+
+### TBD {#refinement-type-tbd}
+
+Most of considerations of [Type Maps](#type-map-tbd) shall be thought of here as well along with the following.
+
+#### Refinement type frameworks
+
+Since predicates are programmable and there is no standard implementation for reasoning about predicates, it is possible to have different frameworks; different implementations for symantically and syntactically similar predicates (e.g. boolean predicates `And`, `Or` and `Not`).
+
+Ideally, there should be a standard generalizable aproach for reasoning about all possible types. By then, there could be a standard implementation for basic predicates.
+
+Currently, it is possible to combine usage of different frameworks to refine the same type. First, `Annotated` accepts variadic metadata arguments and it can be assumed that each argument uses predicates from the same framework:
+
+```python
+import framework1 as f1
+import framework2 as f2
+
+... Annotated[
+  int,
+  f1.And[f1.IsPositive[...], f1.IsEven[...]],
+  f2.Or[f2.IsPrime[...]],
+  ...
+  ] ...
+```
+
+In order to make sure this happens, each framework can define a base marker interface for all predicates to extend from and to require predicate type params to be bounded by that marker.
+
+Since, predicates would refine the same type, each framework could set refined type attributes under a unique namespace to avoid name collisions.
+
+#### Refinement type representation
+
+Type expressions in the form of nested identifiers might not be a concise representation for refinement predicates. It would have been better if it were possibe to use value expressions and operators like `for`-comprehension, pattern matching, `in`, `is`, arithmetic and boolean operators ... A type predicate could then override a bunch of dunder-like magic methods to define behaviour of operators.
+
+Adding the possibility to provide custom type representation for the IDE to show on hover or to be printed by `reveal_type` could also help readability of the predicates. For example, `And` predicate could override a type representation method so that `And[A, B]` would be printed `A & B`.
+
+#### Type functions
+
+It is possible to use type aliases to combine repeatable patterns of refinement predicates type expressions. We could call this form a type function since this effectively defines a simple type-level function.
+
+```python
+type F[X] = Plus[X, If[Is[Even[X]], Literal[0], Literal[1]]]
+```
+
+A question that arises would be how to handle recursive type functions.
+
+```python
+type Factorial[X] = If[
+  Eq[X, Literal[0]],
+  Literal[1],
+  Times[X, Factorial[Minus[X, Literal[1]]]]
+]
+```
+
+```python
+type SumLength[X] = If[
+  IsEmpty[X],
+  Literal[0],
+  Plus[Length[Head[X]], SumLength[Tail[X]]]
+]
+```
+
+There should be efficient methods for reasoning about recursive structures without exhaustively executing the recursion. The type checker  must then convey to the framework any recursive context so that the framework could hanlde reasoning with recursion.
+
+#### Predicates bootstrapping
+
+In order to assign some variable, call it the source variable, to another variable of a refinement type, call it a destination, source type must be refined by predicates that are consistent with destination predicates.
+
+```python
+def refined_abs(x: int) -> Annotated[int, IsGreaterEq[This, Literal[0]]]:
+  y = abs(x)
+  return y # ERROR!
+```
+
+There is no way for the static type checker to prove that the unrefined type of `y` is assignable-to the return refinement type of the function. For the type checker, type of `y` is `int` and not all `int`'s are greater than or equal to `0`.
+
+There has to be a way to let the type checker properly assign the right predicates to the source type.
+
+The type unsafe way for solving this is type casting: `return cast(Annotated[int, IsGreaterEq[This, Literal[0]]], y)`. Otherwise, there could be shorter notation like `assume(expr, pred)` e.g. `return assume(y, IsGreaterEq[This, Literal[0]]])`.
+
+Generally, at a point in the logic, predicates must be assumed, and the earlier assumptions are made the fewer assumptions would be needed down the logic. This could be called predicates bootstrapping. Ideally, bootstrapping should be done by all type constructors and operations.
+
+That would be a challenging task anyways especially if there is no standard method for reasoning.
+
+#### Refinement type construction paradigm
+
+Some patterns could be challenging to implement or even might not be possible at all. We might need a different paradigm than the nested applicative approach. E.g. a [typed lambda-calculus](https://en.wikipedia.org/wiki/Typed_lambda_calculus).
 
 <!-- # Publishing on VSCode Marketplace
 
